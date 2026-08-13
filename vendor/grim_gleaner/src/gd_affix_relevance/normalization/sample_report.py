@@ -1,0 +1,797 @@
+"""Human-readable random affix samples for normalization stress testing."""
+
+from __future__ import annotations
+
+import random
+import re
+import secrets
+from collections import defaultdict, deque
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from gd_affix_relevance.domain import LocalizationEntry, RawDbrRecord
+from gd_affix_relevance.importers.affix_discovery import supported_affix_kind
+from gd_affix_relevance.importers.localization_parser import (
+    first_entry_lookup,
+    plain_display_name,
+)
+from gd_affix_relevance.records import (
+    DEFAULT_DATA_SOURCES,
+    RecordLocation,
+    RecordRepository,
+    normalize_record_path,
+)
+from gd_affix_relevance.stats import RACE_DISPLAY_NAMES
+from gd_affix_relevance.normalization.field_inventory import active_value_kind
+from gd_affix_relevance.normalization.field_policy import fields_for_semantic_analysis
+from gd_affix_relevance.normalization.mapping_proposals import (
+    FieldMappingProposal,
+    chance_damage_bundle_keys,
+    contextualize_damage_chance,
+    propose_field_mapping,
+)
+from gd_affix_relevance.slots import (
+    ARMOR_SLOTS,
+    SLOT_AMULET,
+    SLOT_CHEST,
+    SLOT_FEET,
+    SLOT_HANDS,
+    SLOT_HEAD,
+    SLOT_LABELS,
+    SLOT_LEGS,
+    SLOT_MEDAL,
+    SLOT_OFF_HAND,
+    SLOT_RING,
+    SLOT_SHIELD,
+    SLOT_SHOULDERS,
+    SLOT_WAIST,
+    SLOT_WEAPON_1H_CASTER,
+    SLOT_WEAPON_1H_MELEE,
+    SLOT_WEAPON_1H_RANGED,
+    SLOT_WEAPON_2H_MELEE,
+    SLOT_WEAPON_2H_RANGED,
+    slot_sort_key,
+)
+
+PLACEHOLDER_PATTERN = re.compile(r"\{([^{}]+)\}")
+
+
+@dataclass(frozen=True, slots=True)
+class AffixSampleCandidate:
+    display_name: str
+    localization_tag: str
+    affix_kind: str
+    gear_slot: str
+    stat_lines: tuple[str, ...]
+    representative_source: str
+    rarity: str = ""
+    variant_count: int = 1
+    level_requirements: tuple[int, ...] = ()
+    stat_layout_count: int = 1
+    semantic_properties: tuple[str, ...] = ()
+    semantic_components: tuple[tuple[str, str, str], ...] = ()
+    applicable_slots: tuple[str, ...] = ()
+
+
+@dataclass(slots=True)
+class _CandidateGroup:
+    display_name: str
+    localization_tag: str
+    affix_kind: str
+    gear_slot: str
+    applicable_slots: tuple[str, ...]
+    rarity: str
+    semantic_fingerprint: tuple[tuple[str, str, str], ...]
+    representative_record: RawDbrRecord
+    sources: set[str] = field(default_factory=set)
+    level_requirements: set[int] = field(default_factory=set)
+    preserved_values: dict[tuple[str, str], set[str]] = field(
+        default_factory=dict
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SampleBuildResult:
+    candidates: tuple[AffixSampleCandidate, ...]
+    seed: int
+    candidate_pool_size: int
+    unresolved_name_records_skipped: int
+    unknown_slot_records_skipped: int
+
+
+def build_sample_candidates(
+    data_root: Path,
+    localization_entries: tuple[LocalizationEntry, ...],
+    *,
+    source_names: tuple[str, ...] = DEFAULT_DATA_SOURCES,
+    count: int | None = None,
+    seed: int | None = None,
+    rank_key: Callable[[tuple[str, ...]], tuple[float, ...]] | None = None,
+    repository: RecordRepository | None = None,
+) -> SampleBuildResult:
+    """Build reachable name/slot/stat-fingerprint candidates.
+
+    Logical record paths use expansion overlay semantics: a later source in
+    ``source_names`` replaces an earlier definition at the same path.
+    """
+
+    root = Path(data_root)
+    records = repository or RecordRepository(root, source_names)
+    localization_lookup = first_entry_lookup(localization_entries)
+    edges: dict[str, set[str]] = defaultdict(set)
+    affix_records: dict[str, tuple[str, RawDbrRecord]] = {}
+
+    for location in _relevant_item_locations(records):
+        logical_path = location.logical_path
+        record = records.load(location)
+        record_edges: set[str] = set()
+        for raw_field in record.fields:
+            reference = _referenced_item_dbr(raw_field.value)
+            if reference is not None:
+                record_edges.add(reference)
+        edges[logical_path] = record_edges
+        if supported_affix_kind(record) is not None:
+            affix_records[logical_path] = (location.source, record)
+
+    slots_by_record = _propagate_gear_slots(edges)
+    grouped: dict[
+        tuple[str, str, str, tuple[tuple[str, str, str], ...]], _CandidateGroup
+    ] = {}
+    unresolved_name_records_skipped = 0
+    unknown_slot_records_skipped = 0
+
+    for logical_path, (source_name, record) in sorted(affix_records.items()):
+        if logical_path not in slots_by_record:
+            continue
+        localization_tag = record.first_value("lootRandomizerName") or ""
+        localization_entry = localization_lookup.get(localization_tag)
+        if localization_entry is None:
+            unresolved_name_records_skipped += 1
+            continue
+
+        applicable_slots = tuple(
+            sorted(slots_by_record[logical_path], key=slot_sort_key)
+        )
+        gear_slot = format_gear_slots(set(applicable_slots))
+        if not gear_slot:
+            unknown_slot_records_skipped += 1
+            continue
+
+        display_name = plain_display_name(localization_entry.value)
+        semantic_fingerprint = record_semantic_fingerprint(record)
+        kind = supported_affix_kind(record) or ""
+        rarity = (record.first_value("itemClassification") or "").strip()
+        key = (localization_tag, kind, gear_slot, semantic_fingerprint)
+        group = grouped.setdefault(
+            key,
+            _CandidateGroup(
+                display_name=display_name,
+                localization_tag=localization_tag,
+                affix_kind=kind,
+                gear_slot=gear_slot,
+                applicable_slots=applicable_slots,
+                rarity=rarity,
+                semantic_fingerprint=semantic_fingerprint,
+                representative_record=record,
+            ),
+        )
+        if group.rarity != rarity:
+            raise ValueError(
+                f"affix layout {localization_tag!r} crosses rarities: "
+                f"{group.rarity!r} and {rarity!r}"
+            )
+        group.sources.add(f"{source_name}:{logical_path}")
+        for key_and_role, value in _preserved_semantic_values(record):
+            group.preserved_values.setdefault(key_and_role, set()).add(value)
+        if level_requirement := _parse_level_requirement(record):
+            group.level_requirements.add(level_requirement)
+
+    pool = sorted(
+        grouped.values(),
+        key=lambda group: (
+            group.display_name.lower(),
+            group.gear_slot,
+            group.semantic_fingerprint,
+        ),
+    )
+    layout_counts: dict[tuple[str, str, str], int] = defaultdict(int)
+    for group in pool:
+        layout_counts[
+            (group.localization_tag, group.affix_kind, group.gear_slot)
+        ] += 1
+    actual_seed = secrets.randbits(32) if seed is None else seed
+    if rank_key is not None:
+        ranked_pool = sorted(
+            pool,
+            key=lambda group: rank_key(
+                _semantic_properties(group.semantic_fingerprint)
+            ),
+            reverse=True,
+        )
+        chosen_groups = ranked_pool if count is None else ranked_pool[:count]
+    elif count is None:
+        chosen_groups = pool
+    else:
+        if count < 1:
+            raise ValueError("count must be at least 1")
+        if count > len(pool):
+            raise ValueError(
+                f"count {count} exceeds the {len(pool)} available candidates"
+            )
+        chosen_groups = random.Random(actual_seed).sample(pool, count)
+
+    candidates: list[AffixSampleCandidate] = []
+    for group in chosen_groups:
+        value_overrides = {
+            key_and_role: str(max(int(value) for value in values))
+            for key_and_role, values in group.preserved_values.items()
+            if values
+        }
+        stat_lines = normalize_record_stat_lines(
+            group.representative_record,
+            resolver=records,
+            localization_lookup=localization_lookup,
+            value_overrides=value_overrides,
+        )
+        if not stat_lines:
+            stat_lines = ("[No active normalized stats]",)
+        candidates.append(
+            AffixSampleCandidate(
+                display_name=group.display_name,
+                localization_tag=group.localization_tag,
+                affix_kind=group.affix_kind,
+                gear_slot=group.gear_slot,
+                stat_lines=stat_lines,
+                representative_source=min(group.sources),
+                rarity=group.rarity,
+                variant_count=len(group.sources),
+                level_requirements=tuple(sorted(group.level_requirements)),
+                stat_layout_count=layout_counts[
+                    (group.localization_tag, group.affix_kind, group.gear_slot)
+                ],
+                semantic_properties=_semantic_properties(
+                    group.semantic_fingerprint
+                ),
+                semantic_components=_semantic_components_with_values(
+                    group.semantic_fingerprint,
+                    group.preserved_values,
+                ),
+                applicable_slots=group.applicable_slots,
+            )
+        )
+    return SampleBuildResult(
+        candidates=tuple(candidates),
+        seed=actual_seed,
+        candidate_pool_size=len(pool),
+        unresolved_name_records_skipped=unresolved_name_records_skipped,
+        unknown_slot_records_skipped=unknown_slot_records_skipped,
+    )
+
+
+def format_sample_report(
+    candidates: tuple[AffixSampleCandidate, ...],
+    *,
+    seed: int,
+    candidate_pool_size: int | None = None,
+    unresolved_name_records_skipped: int = 0,
+    unknown_slot_records_skipped: int = 0,
+) -> str:
+    """Render a compact plain-text report for manual Grim Tools comparison."""
+
+    lines = [
+        f"Grim Gleaner affix sample (seed {seed})",
+        f"Sample size: {len(candidates)}",
+    ]
+    if candidate_pool_size is not None:
+        lines.append(f"Candidate pool: {candidate_pool_size}")
+    if unresolved_name_records_skipped:
+        lines.append(
+            "Skipped records with unresolved affix names: "
+            f"{unresolved_name_records_skipped}"
+        )
+    if unknown_slot_records_skipped:
+        lines.append(
+            f"Skipped reachable records with unknown gear slots: {unknown_slot_records_skipped}"
+        )
+
+    for index, candidate in enumerate(candidates, start=1):
+        lines.extend(
+            [
+                "",
+                f"{index}. {candidate.display_name}",
+                f"   Type: {candidate.affix_kind.title()}",
+                f"   Gear slot: {candidate.gear_slot}",
+                *(
+                    [
+                        "   Level requirement(s) for this stat layout: "
+                        + ", ".join(map(str, candidate.level_requirements))
+                    ]
+                    if candidate.level_requirements
+                    else []
+                ),
+                *(
+                    [
+                        "   Distinct stat layouts for this affix/slot: "
+                        f"{candidate.stat_layout_count}"
+                    ]
+                    if candidate.stat_layout_count > 1
+                    else []
+                ),
+                "   Stats:",
+            ]
+        )
+        lines.extend(f"   - {stat_line}" for stat_line in candidate.stat_lines)
+        lines.extend(
+            [
+                f"   Localization: {candidate.localization_tag}",
+                f"   Representative: {candidate.representative_source}",
+                f"   Equivalent leveled/source variants: {candidate.variant_count}",
+            ]
+        )
+    return "\n".join(lines) + "\n"
+
+
+def normalize_record_stat_lines(
+    record: RawDbrRecord,
+    *,
+    resolver: RecordRepository,
+    localization_lookup: dict[str, LocalizationEntry],
+    value_overrides: dict[tuple[str, str], str] | None = None,
+) -> tuple[str, ...]:
+    """Turn active raw fields into mostly abstract player-facing stat lines."""
+
+    mapped_fields: list[tuple[FieldMappingProposal, str]] = []
+    bundles: dict[str, list[tuple[FieldMappingProposal, str]]] = {}
+    order: list[str] = []
+    unresolved_fields: list[str] = []
+
+    for raw_field in fields_for_semantic_analysis(record):
+        if active_value_kind(raw_field.value) is None:
+            continue
+        if raw_field.key in {
+            "racialBonusRace",
+            "racialBonusPercentDamage",
+            "racialBonusPercentDefense",
+        }:
+            continue
+        proposal = propose_field_mapping(raw_field.key)
+        if proposal is None:
+            unresolved_fields.append(raw_field.key)
+            continue
+        if proposal.status == "ignored" or proposal.component_requirement == "metadata":
+            continue
+        mapped_fields.append((proposal, raw_field.value))
+
+    chance_bundles = chance_damage_bundle_keys(
+        proposal for proposal, _ in mapped_fields
+    )
+    overrides = value_overrides or {}
+    for raw_proposal, raw_value in mapped_fields:
+        proposal = contextualize_damage_chance(raw_proposal, chance_bundles)
+        value = overrides.get(
+            (raw_proposal.bundle_key, raw_proposal.value_role), raw_value
+        )
+        if proposal.bundle_key not in bundles:
+            bundles[proposal.bundle_key] = []
+            order.append(proposal.bundle_key)
+        bundles[proposal.bundle_key].append((proposal, value))
+
+    lines: list[str] = list(_format_racial_record_lines(record))
+    for bundle_key in order:
+        components = bundles[bundle_key]
+        property_id = components[0][0].property_id
+        if property_id == "skill_bonus":
+            lines.append(
+                _format_skill_bonus(components, resolver, localization_lookup)
+            )
+        elif property_id == "granted_item_skill":
+            lines.append(
+                _format_granted_skill(components, resolver, localization_lookup)
+            )
+        elif property_id == "pet_bonus":
+            lines.extend(
+                _format_pet_bonus(components, resolver, localization_lookup)
+            )
+        elif property_id == "damage_conversion":
+            lines.append(_format_damage_conversion(components))
+        else:
+            lines.append(_format_generic_bundle(components))
+
+    lines.extend(f"[Needs mapping] {raw_field}" for raw_field in unresolved_fields)
+    return tuple(dict.fromkeys(lines))
+
+
+def _format_racial_record_lines(record: RawDbrRecord) -> tuple[str, ...]:
+    references = (record.first_value("racialBonusRace") or "").split(";")
+    names = tuple(
+        RACE_DISPLAY_NAMES.get(reference.strip().casefold(), "")
+        for reference in references
+        if reference.strip()
+    )
+    target = ", ".join(name for name in names if name) or "Creature Type"
+    lines: list[str] = []
+    if active_value_kind(
+        record.first_value("racialBonusPercentDamage") or ""
+    ) is not None:
+        lines.append(f"+[x]% Damage to {target}")
+    if active_value_kind(
+        record.first_value("racialBonusPercentDefense") or ""
+    ) is not None:
+        lines.append(f"+[x]% Less Damage from {target}")
+    return tuple(lines)
+
+
+def format_gear_slots(slots: set[str] | frozenset[str]) -> str:
+    """Compress atomic loot-table slots into Grim Tools-style applicability."""
+
+    remaining = set(slots)
+    labels: list[str] = []
+    armor_slots = set(ARMOR_SLOTS)
+    all_weapon_slots = {
+        SLOT_WEAPON_1H_MELEE,
+        SLOT_WEAPON_2H_MELEE,
+        SLOT_WEAPON_1H_CASTER,
+        SLOT_WEAPON_1H_RANGED,
+        SLOT_WEAPON_2H_RANGED,
+    }
+    one_handed_slots = {
+        SLOT_WEAPON_1H_MELEE,
+        SLOT_WEAPON_1H_CASTER,
+        SLOT_WEAPON_1H_RANGED,
+    }
+    two_handed_slots = {SLOT_WEAPON_2H_MELEE, SLOT_WEAPON_2H_RANGED}
+    if armor_slots <= remaining:
+        labels.append("All armor")
+        remaining -= armor_slots
+    if {SLOT_RING, SLOT_AMULET} <= remaining:
+        labels.append("Rings, Amulets")
+        remaining -= {SLOT_RING, SLOT_AMULET}
+    if all_weapon_slots <= remaining:
+        labels.append("All weapons")
+        remaining -= all_weapon_slots
+    else:
+        if one_handed_slots <= remaining:
+            labels.append("All one-handed weapons")
+            remaining -= one_handed_slots
+        if two_handed_slots <= remaining:
+            labels.append("All two-handed weapons")
+            remaining -= two_handed_slots
+    labels.extend(
+        SLOT_LABELS.get(slot, slot)
+        for slot in sorted(remaining, key=slot_sort_key)
+    )
+    return "; ".join(labels)
+
+
+def abstract_display_template(template: str) -> str:
+    """Replace semantic placeholders with stable ``[x]``, ``[y]`` markers."""
+
+    names: dict[str, str] = {}
+    symbols = iter("xyzabcdefghijklmnopqrstuvw")
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        names.setdefault(name, f"[{next(symbols)}]")
+        return names[name]
+
+    return PLACEHOLDER_PATTERN.sub(replace, template)
+
+
+def _format_generic_bundle(
+    components: list[tuple[FieldMappingProposal, str]],
+) -> str:
+    templates = [proposal.display_template for proposal, _ in components if proposal.display_template]
+    if templates:
+        template = max(templates, key=lambda value: len(set(PLACEHOLDER_PATTERN.findall(value))))
+        return abstract_display_template(template)
+
+    proposals = [proposal for proposal, _ in components]
+    label = proposals[0].display_label
+    roles = {proposal.value_role for proposal in proposals}
+    if {"duration_min", "damage_min"} <= roles:
+        damage = "[y]-[z]" if "damage_max" in roles else "[y]"
+        duration = "[w]-[v]" if "duration_max" in roles else "[z]"
+        prefix = "[x]% Chance of " if "chance_percent" in roles else ""
+        if not prefix:
+            damage = damage.replace("[y]", "[x]").replace("[z]", "[y]")
+            duration = duration.replace("[z]", "[y]")
+        return f"{prefix}{damage} {label} over {duration} Seconds"
+    if {"damage_min", "damage_max"} <= roles:
+        if "chance_percent" in roles:
+            return f"[x]% Chance of [y]-[z] {label}"
+        return f"[x]-[y] {label}"
+    if "damage_min" in roles:
+        if "chance_percent" in roles:
+            return f"[x]% Chance of [y] {label}"
+        return f"[x] {label}"
+    if "damage_percent" in roles:
+        line = f"+[x]% {label}"
+        if "duration_percent" in roles:
+            line += " with +[y]% Increased Duration"
+        if "chance_percent" in roles:
+            line = f"[z]% Chance of {line}"
+        return line
+    if any("percent" in role for role in roles):
+        return f"+[x]% {label}"
+    return f"+[x] {label}"
+
+
+def _format_damage_conversion(
+    components: list[tuple[FieldMappingProposal, str]],
+) -> str:
+    values = {proposal.value_role: value for proposal, value in components}
+    source = _display_damage_type(values.get("source_damage_type", "Source"))
+    destination = _display_damage_type(
+        values.get("destination_damage_type", "Destination")
+    )
+    return f"[x]% {source} Damage converted to {destination} Damage"
+
+
+def _display_damage_type(raw_damage_type: str) -> str:
+    aliases = {
+        "life": "Vitality",
+        "poison": "Acid",
+    }
+    return aliases.get(raw_damage_type.lower(), raw_damage_type.title())
+
+
+def _format_skill_bonus(
+    components: list[tuple[FieldMappingProposal, str]],
+    resolver: RecordRepository,
+    localization_lookup: dict[str, LocalizationEntry],
+) -> str:
+    reference = next(
+        (
+            value
+            for proposal, value in components
+            if proposal.value_role == "skill_reference"
+        ),
+        "",
+    )
+    skill_name = resolver.resolve_skill_name(reference, localization_lookup)
+    level = next(
+        (
+            value
+            for proposal, value in components
+            if proposal.value_role == "skill_level"
+        ),
+        "",
+    )
+    if level:
+        return f"+{_format_discrete_number(level)} to {skill_name}"
+    return f"Bonus to {skill_name}"
+
+
+def _format_discrete_number(value: str) -> str:
+    try:
+        return str(int(float(value)))
+    except ValueError:
+        return value
+
+
+def _format_granted_skill(
+    components: list[tuple[FieldMappingProposal, str]],
+    resolver: RecordRepository,
+    localization_lookup: dict[str, LocalizationEntry],
+) -> str:
+    reference = next(
+        (value for proposal, value in components if proposal.value_role == "skill_reference"),
+        "",
+    )
+    skill_name = resolver.resolve_skill_name(reference, localization_lookup)
+    return f"*Granted Skill: {skill_name}"
+
+
+def _format_pet_bonus(
+    components: list[tuple[FieldMappingProposal, str]],
+    resolver: RecordRepository,
+    localization_lookup: dict[str, LocalizationEntry],
+) -> tuple[str, ...]:
+    reference = next((value for _, value in components), "")
+    resolved = resolver.resolve(reference)
+    if resolved is None:
+        return (f"Bonus to All Pets: [unresolved {reference}]",)
+    _, pet_record = resolved
+    nested = normalize_record_stat_lines(
+        pet_record,
+        resolver=resolver,
+        localization_lookup=localization_lookup,
+    )
+    return tuple(f"Bonus to All Pets: {line}" for line in nested)
+
+
+def _referenced_item_dbr(value: str) -> str | None:
+    normalized = normalize_record_path(value)
+    if not normalized.startswith("records/items/") or not normalized.endswith(".dbr"):
+        return None
+    return normalized
+
+
+def _relevant_item_locations(
+    repository: RecordRepository,
+) -> tuple[RecordLocation, ...]:
+    """Return only DBRs needed for affix reachability and sampling."""
+
+    locations = {}
+    for relative_root, recursive in (
+        ("records/items/loottables", True),
+        ("records/items/lootaffixes/prefix", False),
+        ("records/items/lootaffixes/prefix/prefixtables", True),
+        ("records/items/lootaffixes/suffix", False),
+        ("records/items/lootaffixes/suffix/suffixtables", True),
+    ):
+        for location in repository.iter_overlaid(
+            relative_root, recursive=recursive
+        ):
+            locations[location.logical_path] = location
+    return tuple(locations[key] for key in sorted(locations))
+
+
+def record_semantic_fingerprint(
+    record: RawDbrRecord,
+) -> tuple[tuple[str, str, str], ...]:
+    """Fingerprint stat presence before expensive reference humanization."""
+
+    mapped_fields: list[tuple[FieldMappingProposal, str]] = []
+    components: list[tuple[str, str, str]] = []
+    for raw_field in fields_for_semantic_analysis(record):
+        if active_value_kind(raw_field.value) is None:
+            continue
+        proposal = propose_field_mapping(raw_field.key)
+        if proposal is None:
+            components.append((f"unmapped:{raw_field.key}", "component", ""))
+            continue
+        if proposal.status == "ignored" or proposal.component_requirement == "metadata":
+            continue
+        mapped_fields.append((proposal, raw_field.value))
+
+    chance_bundles = chance_damage_bundle_keys(
+        proposal for proposal, _ in mapped_fields
+    )
+    for raw_proposal, raw_value in mapped_fields:
+        proposal = contextualize_damage_chance(raw_proposal, chance_bundles)
+        distinguishing_value = ""
+        if proposal.value_role in {
+            "skill_reference",
+            "source_damage_type",
+            "destination_damage_type",
+            "race_reference",
+        }:
+            distinguishing_value = normalize_record_path(raw_value)
+        elif proposal.property_id == "pet_bonus":
+            distinguishing_value = re.sub(
+                r"_\d+(?=\.dbr$)",
+                "_[tier]",
+                normalize_record_path(raw_value),
+            )
+        components.append(
+            (proposal.bundle_key, proposal.value_role, distinguishing_value)
+        )
+    return tuple(sorted(components))
+
+
+def _preserved_semantic_values(
+    record: RawDbrRecord,
+) -> tuple[tuple[tuple[str, str], str], ...]:
+    """Retain discrete magnitudes that relevance scoring can compare safely."""
+
+    values: list[tuple[tuple[str, str], str]] = []
+    for raw_field in fields_for_semantic_analysis(record):
+        if active_value_kind(raw_field.value) is None:
+            continue
+        proposal = propose_field_mapping(raw_field.key)
+        if proposal is None or proposal.value_role != "skill_level":
+            continue
+        try:
+            normalized = str(int(float(raw_field.value)))
+        except ValueError:
+            continue
+        values.append(((proposal.bundle_key, proposal.value_role), normalized))
+    return tuple(values)
+
+
+def _semantic_components_with_values(
+    fingerprint: tuple[tuple[str, str, str], ...],
+    preserved_values: dict[tuple[str, str], set[str]],
+) -> tuple[tuple[str, str, str], ...]:
+    components: list[tuple[str, str, str]] = []
+    for bundle_key, role, value in fingerprint:
+        candidates = preserved_values.get((bundle_key, role), set())
+        if not candidates:
+            components.append((bundle_key, role, value))
+            continue
+        numeric = sorted({int(candidate) for candidate in candidates})
+        components.append((bundle_key, role, str(numeric[-1])))
+        if len(numeric) > 1:
+            components.extend(
+                (
+                    (bundle_key, f"{role}_min", str(numeric[0])),
+                    (bundle_key, f"{role}_max", str(numeric[-1])),
+                )
+            )
+    return tuple(sorted(components))
+
+
+def _semantic_properties(
+    fingerprint: tuple[tuple[str, str, str], ...],
+) -> tuple[str, ...]:
+    return tuple(sorted({bundle_key for bundle_key, _, _ in fingerprint}))
+
+
+def _parse_level_requirement(record: RawDbrRecord) -> int | None:
+    raw_level = record.first_value("levelRequirement")
+    if not raw_level:
+        return None
+    try:
+        return int(float(raw_level))
+    except ValueError:
+        return None
+
+
+def _propagate_gear_slots(edges: dict[str, set[str]]) -> dict[str, set[str]]:
+    slots_by_record: dict[str, set[str]] = defaultdict(set)
+    pending: deque[str] = deque()
+    for logical_path in edges:
+        slots = _slots_from_loottable_path(logical_path)
+        if not slots:
+            continue
+        slots_by_record[logical_path].update(slots)
+        pending.append(logical_path)
+
+    while pending:
+        parent = pending.popleft()
+        parent_slots = slots_by_record[parent]
+        for child in edges.get(parent, ()):
+            added = parent_slots - slots_by_record[child]
+            if not added:
+                continue
+            slots_by_record[child].update(added)
+            pending.append(child)
+    return slots_by_record
+
+
+def _slots_from_loottable_path(logical_path: str) -> set[str]:
+    prefix = "records/items/loottables/"
+    if not logical_path.startswith(prefix):
+        return set()
+    relative = logical_path[len(prefix) :]
+    filename = Path(relative).stem.lower()
+    top_directory = relative.split("/", maxsplit=1)[0]
+    fixed_directories = {
+        "gearhead": SLOT_HEAD,
+        "gearshoulders": SLOT_SHOULDERS,
+        "geartorso": SLOT_CHEST,
+        "gearhands": SLOT_HANDS,
+        "gearlegs": SLOT_LEGS,
+        "gearfeet": SLOT_FEET,
+    }
+    if top_directory in fixed_directories:
+        return {fixed_directories[top_directory]}
+    if top_directory == "gearaccessories":
+        if "necklace" in filename:
+            return {SLOT_AMULET}
+        if "ring" in filename:
+            return {SLOT_RING}
+        if "medal" in filename:
+            return {SLOT_MEDAL}
+        if "waist" in filename:
+            return {SLOT_WAIST}
+    if top_directory in {"weapons", "damagetables"} or "damagetables/" in relative:
+        if "shield+focus" in filename:
+            return set()
+        if "focus" in filename:
+            return {SLOT_OFF_HAND}
+        if "shield" in filename:
+            return {SLOT_SHIELD}
+        if "caster" in filename:
+            return {SLOT_WEAPON_1H_CASTER}
+        if "gun2h" in filename or "ranged2h" in filename:
+            return {SLOT_WEAPON_2H_RANGED}
+        if "gun1h" in filename or "ranged1h" in filename:
+            return {SLOT_WEAPON_1H_RANGED}
+        if "melee2h" in filename:
+            return {SLOT_WEAPON_2H_MELEE}
+        if "1h" in filename:
+            return {SLOT_WEAPON_1H_MELEE}
+    return set()

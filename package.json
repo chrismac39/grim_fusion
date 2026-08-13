@@ -12,6 +12,8 @@
     "build": "tsc -b",
     "clean": "tsc -b --clean",
     "dev": "npm run --workspace @grim-fusion/cli dev --",
+    "postinstall": "node scripts/bootstrap-grim-gleaner-deps.js",
+    "setup:deps": "node scripts/bootstrap-grim-gleaner-deps.js",
     "typecheck": "tsc -b",
     "test": "tsx --test apps/cli/tests/**/*.spec.ts"
   },

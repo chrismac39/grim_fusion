@@ -1,0 +1,3 @@
+[console_scripts]
+grim-gleaner = gd_affix_relevance.cli:main
+grim-gleaner-ui = gd_affix_relevance.ui.app:main

@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline/promises";
@@ -40,6 +40,12 @@ type CliArgs = {
   grimDawnPath?: string;
   planName?: string;
   forceApply?: boolean;
+};
+
+type PythonRuntime = {
+  command: string;
+  baseArgs: string[];
+  display: string;
 };
 
 type BuildPlan = {
@@ -98,21 +104,29 @@ type FusionOutput = {
 const CLI_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(CLI_DIR, "..", "..", "..");
 const PLANS_DIR = path.join(REPO_ROOT, "artifacts", "plans");
+const VENDORED_GLEANER_ROOT = path.join(REPO_ROOT, "vendor", "grim_gleaner");
 const DEFAULT_GD_PATH =
   process.env.GRIM_DAWN_INSTALL_PATH ??
   "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Grim Dawn";
 
 function resolveUserPath(inputPath: string): string {
-  if (path.isAbsolute(inputPath)) {
-    return inputPath;
+  const trimmed = inputPath.trim();
+  const unquoted =
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+      ? trimmed.slice(1, -1)
+      : trimmed;
+
+  if (path.isAbsolute(unquoted)) {
+    return unquoted;
   }
 
-  const fromCwd = path.resolve(process.cwd(), inputPath);
+  const fromCwd = path.resolve(process.cwd(), unquoted);
   try {
     statSync(fromCwd);
     return fromCwd;
   } catch {
-    return path.resolve(REPO_ROOT, inputPath);
+    return path.resolve(REPO_ROOT, unquoted);
   }
 }
 
@@ -135,7 +149,6 @@ function parseArgs(argv: string[]): CliArgs {
 
   const out: CliArgs = {
     command,
-    python: "python",
   };
 
   for (let i = 0; i < rest.length; i += 1) {
@@ -189,6 +202,71 @@ function parseArgs(argv: string[]): CliArgs {
   }
 
   return out;
+}
+
+function runCommand(
+  command: string,
+  args: string[],
+  cwd?: string
+): SpawnSyncReturns<string> {
+  return spawnSync(command, args, {
+    cwd,
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+}
+
+function commandOk(result: SpawnSyncReturns<string>): boolean {
+  return (result.status ?? 1) === 0;
+}
+
+function detectPythonRuntime(pythonOverride?: string): PythonRuntime {
+  if (pythonOverride) {
+    const looksLikePath = /[\\/]/.test(pythonOverride) || /\.exe$/i.test(pythonOverride);
+    const command = looksLikePath
+      ? resolveUserPath(pythonOverride)
+      : pythonOverride.trim();
+    return {
+      command,
+      baseArgs: [],
+      display: command,
+    };
+  }
+
+  const py313 = runCommand("py", ["-3.13", "--version"]);
+  if (commandOk(py313)) {
+    return {
+      command: "py",
+      baseArgs: ["-3.13"],
+      display: "py -3.13",
+    };
+  }
+
+  const python313 = runCommand("python3.13", ["--version"]);
+  if (commandOk(python313)) {
+    return {
+      command: "python3.13",
+      baseArgs: [],
+      display: "python3.13",
+    };
+  }
+
+  const python = runCommand("python", ["--version"]);
+  if (commandOk(python) && /Python\s+3\.13\./.test(`${python.stdout}${python.stderr}`)) {
+    return {
+      command: "python",
+      baseArgs: [],
+      display: "python",
+    };
+  }
+
+  throw new Error(
+    [
+      "Could not find Python 3.13 runtime.",
+      "Run npm install from grim_fusion root to bootstrap dependencies,",
+      "or pass --python <path-to-python-3.13>.",
+    ].join("\n")
+  );
 }
 
 function hashText(text: string): string {
@@ -269,60 +347,45 @@ function formatStalenessWarnings(plan: BuildPlan): string[] {
   return warnings;
 }
 
-function runCommandOk(command: string, args: string[], cwd?: string): boolean {
-  const result = spawnSync(command, args, {
-    cwd,
-    encoding: "utf8",
-    stdio: "pipe",
-  });
-  return (result.status ?? 1) === 0;
-}
-
-function ensureToolsAndDependencies(gleanerRoot: string, python: string): void {
-  const wingetAvailable = runCommandOk("winget", ["--version"]);
-  const pythonAvailable = runCommandOk(python, ["--version"]);
-
-  if (!pythonAvailable) {
-    const help = wingetAvailable
-      ? [
-          "Python not found.",
-          "Install with:",
-          "  winget install --id Python.Python.3.13 -e",
-          "Manual installer:",
-          "  https://www.python.org/downloads/",
-        ]
-      : [
-          "Python not found and winget is unavailable.",
-          "Manual installer:",
-          "  https://www.python.org/downloads/",
-        ];
-    throw new Error(help.join("\n"));
-  }
-
-  const pysideOk = runCommandOk(python, ["-c", "import PySide6"]);
-  if (!pysideOk) {
+function ensureToolsAndDependencies(
+  gleanerRoot: string,
+  runtime: PythonRuntime
+): void {
+  if (!existsSync(gleanerRoot)) {
     throw new Error(
       [
-        "PySide6 is not installed for your selected Python.",
-        "From grim_gleaner root, run:",
-        `  ${python} -m pip install -e .`,
-        "Manual PySide6 docs:",
-        "  https://doc.qt.io/qtforpython-6/gettingstarted/index.html",
+        `Vendored grim_gleaner path not found: ${gleanerRoot}`,
+        "Ensure vendor/grim_gleaner exists in this repository.",
       ].join("\n")
     );
   }
 
-  const gleanerImportOk = runCommandOk(
-    python,
-    ["-c", "import gd_affix_relevance"],
-    gleanerRoot
-  );
-  if (!gleanerImportOk) {
+  const pysideOk = runCommand(runtime.command, [
+    ...runtime.baseArgs,
+    "-c",
+    "import PySide6",
+  ]);
+  if (!commandOk(pysideOk)) {
     throw new Error(
       [
-        "grim_gleaner package import failed.",
-        "From grim_gleaner root, run:",
-        `  ${python} -m pip install -e .`,
+        "PySide6 is not installed for the selected Python runtime.",
+        "Run npm install (or npm run setup:deps) from grim_fusion root.",
+        `Runtime checked: ${runtime.display}`,
+      ].join("\n")
+    );
+  }
+
+  const gleanerImportOk = runCommand(
+    runtime.command,
+    [...runtime.baseArgs, "-c", "import gd_affix_relevance"],
+    gleanerRoot
+  );
+  if (!commandOk(gleanerImportOk)) {
+    throw new Error(
+      [
+        "Vendored grim_gleaner import failed.",
+        "Run npm install (or npm run setup:deps) from grim_fusion root.",
+        `Runtime checked: ${runtime.display}`,
       ].join("\n")
     );
   }
@@ -422,8 +485,8 @@ function runFusion(args: CliArgs): void {
 function launchGleanerUi(args: CliArgs): void {
   const gleanerRoot = args.gleanerRoot
     ? resolveUserPath(args.gleanerRoot)
-    : path.resolve(REPO_ROOT, "..", "grim_gleaner");
-  const python = args.python ?? "python";
+    : VENDORED_GLEANER_ROOT;
+  const runtime = detectPythonRuntime(args.python);
   const env = {
     ...process.env,
     PYTHONPATH: [path.join(gleanerRoot, "src"), process.env.PYTHONPATH ?? ""]
@@ -431,12 +494,16 @@ function launchGleanerUi(args: CliArgs): void {
       .join(process.platform === "win32" ? ";" : ":"),
   };
 
-  console.log(`Launching grim_gleaner UI from ${gleanerRoot}...`);
-  const result = spawnSync(python, ["-m", "gd_affix_relevance.ui.app"], {
+  console.log(`Launching grim_gleaner UI from ${gleanerRoot} using ${runtime.display}...`);
+  const result = spawnSync(
+    runtime.command,
+    [...runtime.baseArgs, "-m", "gd_affix_relevance.ui.app"],
+    {
     cwd: gleanerRoot,
     env,
     stdio: "inherit",
-  });
+    }
+  );
 
   if (result.error) {
     throw result.error;
@@ -770,17 +837,20 @@ async function runGuidedSession(args: CliArgs): Promise<void> {
     );
     const grimDawnPath = resolveUserPath(grimDawnPathAnswer || args.grimDawnPath || DEFAULT_GD_PATH);
 
-    const gleanerRoot = resolveUserPath(
-      args.gleanerRoot ?? path.resolve(REPO_ROOT, "..", "grim_gleaner")
-    );
-    const python = args.python ?? "python";
+    const gleanerRoot = resolveUserPath(args.gleanerRoot ?? VENDORED_GLEANER_ROOT);
+    const runtime = detectPythonRuntime(args.python);
 
     console.log("Checking tools and dependencies...");
-    ensureToolsAndDependencies(gleanerRoot, python);
+    ensureToolsAndDependencies(gleanerRoot, runtime);
     console.log("Tools look good.");
 
     console.log("2) Launching grim_gleaner UI. Save your build profile, then close the UI.");
-    launchGleanerUi({ ...args, gleanerRoot, python, command: "run-with-gleaner" });
+    launchGleanerUi({
+      ...args,
+      gleanerRoot,
+      python: args.python,
+      command: "run-with-gleaner",
+    });
 
     const profileModePath = await ask(
       rl,
@@ -818,7 +888,7 @@ async function runGuidedSession(args: CliArgs): Promise<void> {
       palettePath,
       itemsPath,
       gleanerRoot,
-      python,
+      python: runtime.display,
       updatedAt: new Date().toISOString(),
     };
     const planFile = savePlan(plan);
@@ -889,7 +959,8 @@ function runExample(): void {
 function printUsage(): void {
   console.log("grim-fusion usage:");
   console.log("  npm run dev -- --example");
-  console.log("  npm run dev -- session [--gleaner-root <path>] [--grim-dawn-path <path>] [--items <items.json>] [--plan-name <name>] [--force-apply]");
+  console.log("  npm run dev -- session [--grim-dawn-path <path>] [--items <items.json>] [--plan-name <name>] [--force-apply]");
+  console.log("    (uses vendor/grim_gleaner by default; override with --gleaner-root if needed)");
   console.log("  npm run dev -- apply-plan [--plan-name <name>] [--force-apply]");
   console.log("  npm run dev -- run --profile <profile.json> --items <items.json> [--palette <gdse-palette.txt>] [--out <output.json>]");
   console.log("  npm run dev -- run --profile-dir <dir> --items <items.json> [--palette <gdse-palette.txt>] [--out <output.json>]");

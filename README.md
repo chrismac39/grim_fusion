@@ -11,6 +11,10 @@ TypeScript monorepo that merges two Grim Dawn modding ideas:
 - `packages/scoring-engine`: profile-weighted scoring and grade mapping
 - `packages/tag-composer`: deterministic merge of color + grade tags
 - `apps/cli`: local CLI entrypoint for pipeline runs
+- `vendor/grim_gleaner`: vendored Python UI/scoring source used by fusion session flow
+- `vendor/gdse`: vendored Rust source (including your feature-branch extensions) used as reference and parity target
+
+This repo is now self-contained. grim_fusion defaults to vendored sources and does not require cross-repo calls.
 
 ## Initial precedence rules
 
@@ -26,6 +30,29 @@ cd C:\repos\grim_fusion
 npm install
 npm run build
 npm run dev -- --example
+```
+
+`npm install` now bootstraps grim_gleaner dependencies automatically:
+
+- verifies Python 3.13
+- installs Python 3.13 via `winget` on Windows if missing
+- installs `grim_gleaner` editable package plus `PySide6`
+
+The editable install target is `vendor\grim_gleaner` by default.
+
+By default it uses the vendored copy at `vendor\grim_gleaner` inside this repo.
+No sibling-repo lookup is required.
+
+You can still override with `GRIM_GLEANER_ROOT` if needed:
+
+```powershell
+setx GRIM_GLEANER_ROOT "C:\path\to\grim_gleaner"
+```
+
+You can rerun bootstrap manually at any time:
+
+```powershell
+npm run setup:deps
 ```
 
 ## Current unified workflow
@@ -44,7 +71,7 @@ This follows the intended end-user flow:
 6. Let you choose a plan and apply generated text into `settings/text_en`.
 
 ```powershell
-npm run dev -- session --gleaner-root C:\repos\grim_gleaner --grim-dawn-path "C:\Program Files (x86)\Steam\steamapps\common\Grim Dawn"
+npm run dev -- session --grim-dawn-path "C:\Program Files (x86)\Steam\steamapps\common\Grim Dawn"
 ```
 
 The session command also writes hash history in `settings/gdse-db-hash.txt` using gdse-compatible line format:
@@ -86,11 +113,11 @@ npm run dev -- run --profile C:\path\to\profile.json --items fixtures\shared\ite
 2. Launch grim_gleaner UI first, then run fusion immediately after the UI closes:
 
 ```powershell
-npm run dev -- run-with-gleaner --gleaner-root C:\repos\grim_gleaner --profile C:\path\to\profile.json --items fixtures\shared\items.json --palette fixtures\shared\gdse-palette.txt --out fusion-output.json
+npm run dev -- run-with-gleaner --profile C:\path\to\profile.json --items fixtures\shared\items.json --palette fixtures\shared\gdse-palette.txt --out fusion-output.json
 ```
 
 3. If you save a profile in a folder and want auto-pick of the newest JSON:
 
 ```powershell
-npm run dev -- run-with-gleaner --gleaner-root C:\repos\grim_gleaner --profile-dir C:\repos\grim_gleaner\artifacts\profiles\examples --items fixtures\shared\items.json --palette fixtures\shared\gdse-palette.txt
+npm run dev -- run-with-gleaner --profile-dir vendor\grim_gleaner\artifacts\profiles\examples --items fixtures\shared\items.json --palette fixtures\shared\gdse-palette.txt
 ```

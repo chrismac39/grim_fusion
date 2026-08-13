@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: gd-affix-relevance
+Version: 0.9.0b0
+Summary: Build-relevance annotations for Grim Dawn affixes
+Requires-Python: <3.15,>=3.13
+License-File: LICENSE.TXT
+Requires-Dist: PySide6==6.11.1
+Provides-Extra: test
+Requires-Dist: pytest>=8.3; extra == "test"
+Provides-Extra: release
+Requires-Dist: Nuitka==4.1.3; extra == "release"
+Dynamic: license-file

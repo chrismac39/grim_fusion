@@ -1,0 +1,7 @@
+PySide6==6.11.1
+
+[release]
+Nuitka==4.1.3
+
+[test]
+pytest>=8.3
