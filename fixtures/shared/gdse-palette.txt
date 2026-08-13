@@ -1,0 +1,4 @@
+# Shared fixture format: gdse-style key=value palette file
+rarity.legendary=i
+damage.chaos=f
+nondamage.offensive_ability=t

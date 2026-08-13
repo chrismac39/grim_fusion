@@ -1,0 +1,19 @@
+{
+  "schema_version": 4,
+  "name": "Fixture Fire Shieldbreaker",
+  "masteries": [
+    "playerclass02",
+    "playerclass09"
+  ],
+  "skill_weights": {
+    "records/skills/playerclass02/thermitemines1.dbr": 4
+  },
+  "weights": {
+    "fire_damage_percent": 4,
+    "movement_speed": 4,
+    "offensive_ability": 4
+  },
+  "resistance_cap_enabled": false,
+  "resistance_cap_weights": {},
+  "excluded_conversion_sources": {}
+}

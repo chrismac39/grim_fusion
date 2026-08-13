@@ -1,0 +1,26 @@
+[
+  {
+    "id": "item-001",
+    "name": "Blazeguard Signet",
+    "rarity": "rare",
+    "stats": [
+      { "key": "fire_damage_percent", "value": 52 },
+      { "key": "offensive_ability", "value": 78 },
+      {
+        "key": "skill_bonus:records/skills/playerclass02/thermitemines1_buff.dbr",
+        "value": 3
+      },
+      { "key": "mastery_bonus:playerclass02", "value": 1 }
+    ]
+  },
+  {
+    "id": "item-002",
+    "name": "Voidstep Treads",
+    "rarity": "legendary",
+    "stats": [
+      { "key": "chaos_damage_percent", "value": 64 },
+      { "key": "movement_speed", "value": 6 },
+      { "key": "mastery_bonus:playerclass01", "value": 1 }
+    ]
+  }
+]

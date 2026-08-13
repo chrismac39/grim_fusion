@@ -23,6 +23,22 @@ export interface Palette {
 export interface BuildProfile {
   name: string;
   weights: Record<string, number>;
+  masteries: [string, string];
+  skillWeights: Record<string, number>;
+  excludedConversionSources: Record<string, string[]>;
+  resistanceCapEnabled: boolean;
+  resistanceCapWeights: Record<string, number>;
+}
+
+export interface BuildProfileFile {
+  schema_version: number;
+  name: string;
+  weights: Record<string, number>;
+  masteries: [string, string];
+  skill_weights: Record<string, number>;
+  excluded_conversion_sources: Record<string, string[]>;
+  resistance_cap_enabled: boolean;
+  resistance_cap_weights: Record<string, number>;
 }
 
 export interface ItemStat {
@@ -51,6 +67,19 @@ export interface ScoredItem {
   item: ItemRecord;
   score: number;
   grade: Grade;
+}
+
+export interface RelevanceScore {
+  grade: Grade;
+  weightedMatch: number;
+  relevancePoints: number;
+  baseEffectiveScore: number;
+  profileAdjustment: number;
+  effectiveScore: number;
+  matchedCount: number;
+  totalCategoryCount: number;
+  coverageRatio: number;
+  matchedStatIds: string[];
 }
 
 export interface ComposedTag {

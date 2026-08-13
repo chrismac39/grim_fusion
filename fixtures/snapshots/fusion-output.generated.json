@@ -1,0 +1,46 @@
+{
+  "profile": {
+    "name": "Fixture Fire Shieldbreaker",
+    "masteries": [
+      "playerclass02",
+      "playerclass09"
+    ],
+    "profilePath": "C:\\repos\\grim_fusion\\fixtures\\shared\\grim-gleaner-profile.json"
+  },
+  "palette": {
+    "palettePath": "C:\\repos\\grim_fusion\\fixtures\\shared\\gdse-palette.txt",
+    "rarity": {
+      "common": "w",
+      "magical": "y",
+      "rare": "g",
+      "legendary": "i"
+    }
+  },
+  "items": [
+    {
+      "id": "item-001",
+      "name": "Blazeguard Signet",
+      "grade": "S",
+      "weightedMatch": 16,
+      "effectiveScore": 14.4,
+      "matchedStatIds": [
+        "fire_damage_percent",
+        "mastery_bonus:playerclass02",
+        "offensive_ability",
+        "skill_bonus:records/skills/playerclass02/thermitemines1_buff.dbr"
+      ],
+      "displayTag": "{^g}[S] Blazeguard Signet{^w}"
+    },
+    {
+      "id": "item-002",
+      "name": "Voidstep Treads",
+      "grade": "D",
+      "weightedMatch": 4,
+      "effectiveScore": 2.88,
+      "matchedStatIds": [
+        "movement_speed"
+      ],
+      "displayTag": "{^i}[D] Voidstep Treads{^w}"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "items": [
+    {
+      "effectiveScore": 14.4,
+      "grade": "S",
+      "id": "item-001",
+      "matchedStatIds": [
+        "fire_damage_percent",
+        "mastery_bonus:playerclass02",
+        "offensive_ability",
+        "skill_bonus:records/skills/playerclass02/thermitemines1_buff.dbr"
+      ],
+      "tag": "{^g}[S] Blazeguard Signet{^w}",
+      "weightedMatch": 16
+    },
+    {
+      "effectiveScore": 2.88,
+      "grade": "D",
+      "id": "item-002",
+      "matchedStatIds": [
+        "movement_speed"
+      ],
+      "tag": "{^i}[D] Voidstep Treads{^w}",
+      "weightedMatch": 4
+    }
+  ],
+  "palette": {
+    "chaos": "f",
+    "legendary": "i"
+  },
+  "profile": {
+    "masteries": [
+      "playerclass02",
+      "playerclass09"
+    ],
+    "name": "Fixture Fire Shieldbreaker"
+  }
+}
