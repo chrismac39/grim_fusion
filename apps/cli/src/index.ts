@@ -152,6 +152,11 @@ function parseArgs(argv: string[]): CliArgs {
 
   for (let i = 0; i < rest.length; i += 1) {
     const token = rest[i];
+    if (token === "--force-apply") {
+      out.forceApply = true;
+      continue;
+    }
+
     const value = rest[i + 1];
     if (!token.startsWith("--")) {
       continue;
@@ -190,11 +195,6 @@ function parseArgs(argv: string[]): CliArgs {
     }
 
     i += 1;
-  }
-
-
-  if (rest.includes("--force-apply")) {
-    out.forceApply = true;
   }
 
   return out;
@@ -510,6 +510,33 @@ function launchGleanerUi(args: CliArgs): void {
   if ((result.status ?? 1) !== 0) {
     throw new Error(`grim_gleaner UI exited with code ${result.status}`);
   }
+}
+
+function runWithGleaner(args: CliArgs): void {
+  const grimDawnPath = resolveUserPath(args.grimDawnPath || DEFAULT_GD_PATH);
+  const fusionOutput = buildFusionOutput(args);
+  const deployed = deployToGrimDawn(
+    fusionOutput,
+    grimDawnPath,
+    args.forceApply ?? false
+  );
+
+  console.log(
+    deployed.deployed
+      ? `Applied gdse-style fusion colorization to ${deployed.targetFile}`
+      : `Fusion colorization unchanged. Existing text kept at ${deployed.targetFile}`
+  );
+
+  if (args.outPath) {
+    const outPath = resolveUserPath(args.outPath);
+    writeFileSync(outPath, `${JSON.stringify(fusionOutput, null, 2)}\n`, "utf8");
+    console.log(`Wrote fusion output to ${outPath}`);
+  }
+
+  launchGleanerUi({
+    ...args,
+    grimDawnPath,
+  });
 }
 
 function ensureTextEnFolder(grimDawnPath: string): string {
@@ -851,14 +878,7 @@ async function runGuidedSession(args: CliArgs): Promise<void> {
     ensureToolsAndDependencies(gleanerRoot, runtime);
     console.log("Tools look good.");
 
-    console.log("2) Launching grim_gleaner UI. Save your build profile, then close the UI.");
-    launchGleanerUi({
-      ...args,
-      grimDawnPath,
-      python: args.python,
-      command: "run-with-gleaner",
-    });
-
+    console.log("2) Profile source for pre-Gleaner gdse-style colorization");
     const profileModePath = await ask(
       rl,
       "Profile JSON path (leave blank to auto-pick newest in a directory): "
@@ -870,7 +890,8 @@ async function runGuidedSession(args: CliArgs): Promise<void> {
             (await ask(rl, `Profile directory [${profileDirDefault}]: `)) || profileDirDefault
           )
         : undefined;
-    const profilePath = profileModePath.length > 0 ? resolveUserPath(profileModePath) : undefined;
+    const profilePath =
+      profileModePath.length > 0 ? resolveUserPath(profileModePath) : undefined;
 
     console.log("3) Palette selection (gdse style)");
     const useDefaultPalette = await askYesNo(rl, "Use default gdse palette?", true);
@@ -880,6 +901,21 @@ async function runGuidedSession(args: CliArgs): Promise<void> {
 
     const itemsDefault = args.itemsPath ?? path.join("fixtures", "shared", "items.json");
     const itemsPath = resolveUserPath((await ask(rl, `Items JSON path [${itemsDefault}]: `)) || itemsDefault);
+
+    console.log(
+      "4) Running gdse-style fusion generation/apply before launching grim_gleaner UI."
+    );
+    runWithGleaner({
+      ...args,
+      command: "run-with-gleaner",
+      grimDawnPath,
+      python: args.python,
+      profilePath,
+      profileDir,
+      palettePath,
+      itemsPath,
+      forceApply: args.forceApply,
+    });
 
     const suggestedPlanName =
       (args.planName ??
@@ -970,8 +1006,8 @@ function printUsage(): void {
   console.log("  npm run dev -- apply-plan [--plan-name <name>] [--force-apply]");
   console.log("  npm run dev -- run --profile <profile.json> --items <items.json> [--palette <gdse-palette.txt>] [--out <output.json>]");
   console.log("  npm run dev -- run --profile-dir <dir> --items <items.json> [--palette <gdse-palette.txt>] [--out <output.json>]");
-  console.log("  npm run dev -- run-with-gleaner --profile <profile.json> --items <items.json> [--palette <gdse-palette.txt>] [--out <output.json>]");
-  console.log("  npm run dev -- run-with-gleaner --profile-dir <dir-with-profile-json> --items <items.json> [--palette <gdse-palette.txt>]");
+  console.log("  npm run dev -- run-with-gleaner --profile <profile.json> --items <items.json> [--palette <gdse-palette.txt>] [--grim-dawn-path <path>] [--out <output.json>] [--force-apply]");
+  console.log("  npm run dev -- run-with-gleaner --profile-dir <dir-with-profile-json> --items <items.json> [--palette <gdse-palette.txt>] [--grim-dawn-path <path>] [--out <output.json>] [--force-apply]");
 }
 
 async function main(): Promise<void> {
@@ -990,8 +1026,7 @@ async function main(): Promise<void> {
       return;
     }
     if (args.command === "run-with-gleaner") {
-      launchGleanerUi(args);
-      runFusion(args);
+      runWithGleaner(args);
       return;
     }
     runFusion(args);

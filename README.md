@@ -1,7 +1,7 @@
 # grim-fusion
 
 TypeScript monorepo that merges two Grim Dawn modding ideas:
-- Rainbow filter inspires gdse-style automated damage type colorization
+- Rainbow filter inspired gdse-style automated item  colorization
 - grim_gleaner-style build relevance grading (F through S++)
 
 ## Monorepo layout
@@ -59,10 +59,11 @@ This follows the intended end-user flow:
 
 1. Ask for Grim Dawn install path.
 2. Verify Python and grim_gleaner UI dependencies.
-3. Launch grim_gleaner UI for profile creation/editing.
-4. Ask default/custom gdse palette.
-5. Save a named build plan.
-6. Let you choose a plan and apply generated text into `settings/text_en`.
+3. Ask for profile source and palette/items inputs.
+4. Always run gdse-style fusion generation/apply first.
+5. Launch grim_gleaner UI for profile creation/editing.
+6. Save a named build plan.
+7. Let you choose a plan and apply generated text into `settings/text_en`.
 
 ```powershell
 npm run dev -- session --grim-dawn-path "C:\Program Files (x86)\Steam\steamapps\common\Grim Dawn"
@@ -104,14 +105,16 @@ npm run dev -- apply-plan
 npm run dev -- run --profile C:\path\to\profile.json --items fixtures\shared\items.json --palette fixtures\shared\gdse-palette.txt --out fusion-output.json
 ```
 
-2. Launch grim_gleaner UI first, then run fusion immediately after the UI closes:
+2. Generate and apply gdse-style fusion colorization first, then launch grim_gleaner UI:
 
 ```powershell
-npm run dev -- run-with-gleaner --profile C:\path\to\profile.json --items fixtures\shared\items.json --palette fixtures\shared\gdse-palette.txt --out fusion-output.json
+npm run dev -- run-with-gleaner --profile C:\path\to\profile.json --items fixtures\shared\items.json --palette fixtures\shared\gdse-palette.txt --grim-dawn-path "C:\Program Files (x86)\Steam\steamapps\common\Grim Dawn" --out fusion-output.json
 ```
+
+This ensures the active localization already includes fusion/gdse colorization before Export Grades is used in the UI.
 
 3. If you save a profile in a folder and want auto-pick of the newest JSON:
 
 ```powershell
-npm run dev -- run-with-gleaner --profile-dir vendor\grim_gleaner\artifacts\profiles\examples --items fixtures\shared\items.json --palette fixtures\shared\gdse-palette.txt
+npm run dev -- run-with-gleaner --profile-dir vendor\grim_gleaner\artifacts\profiles\examples --items fixtures\shared\items.json --palette fixtures\shared\gdse-palette.txt --grim-dawn-path "C:\Program Files (x86)\Steam\steamapps\common\Grim Dawn"
 ```
