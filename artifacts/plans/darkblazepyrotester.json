@@ -1,0 +1,21 @@
+{
+  "name": "DarkBlazePyroTester",
+  "grimDawnPath": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Grim Dawn",
+  "profileDir": "C:\\repos\\grim_fusion\\vendor\\grim_gleaner\\artifacts\\profiles\\examples",
+  "paletteMode": "default",
+  "itemsPath": "C:\\repos\\grim_fusion\\fixtures\\shared\\items.json",
+  "gleanerRoot": "C:\\repos\\grim_fusion\\vendor\\grim_gleaner",
+  "python": "py -3.13",
+  "updatedAt": "2026-08-13T21:58:52.112Z",
+  "generation": {
+    "generatedAt": "2026-08-13T21:58:52.112Z",
+    "profilePathResolved": "C:\\repos\\grim_fusion\\vendor\\grim_gleaner\\artifacts\\profiles\\examples\\Chaos_CT_Warlock.json",
+    "profileHash": "2f5eeb0c111c005a07a1f2f8e769ab49b809b653ba4726bf8b5dd7ae546b8f2a",
+    "itemsPathResolved": "C:\\repos\\grim_fusion\\fixtures\\shared\\items.json",
+    "itemsHash": "ab8c6a8d9644cf85d4cf162a5a2c98b23b0094d17122e7112e13258f35c3b239",
+    "paletteMode": "default",
+    "fusionTextHash": "2cb53cb28f5d7762e571322248b1b53edc4270ca87a0be894b00f3e8e0b035da",
+    "steamBuildId": "24619876",
+    "patchVersions": "Patch v1.3.1"
+  }
+}

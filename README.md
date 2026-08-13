@@ -73,7 +73,7 @@ The session command also writes hash history in `settings/gdse-db-hash.txt` usin
 
 `<YYYY-MM-DD HH:MM> hash=<sha256> steam_build_id=<id_or_unknown> patch_versions=<list_or_unknown>`
 
-Saved plans are stored in `artifacts/plans/*.json` and now include generation metadata:
+Fusion plan metadata is stored inside the same Grim Gleaner profile JSON file (key: `grim_fusion_plan`) and includes generation metadata:
 
 - source profile hash
 - source items hash (db-style input hash)

@@ -1,0 +1,10 @@
+{
+  "name": "DarkBlazePyrotest2",
+  "grimDawnPath": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Grim Dawn",
+  "profileDir": "C:\\repos\\grim_fusion\\vendor\\grim_gleaner\\artifacts\\profiles\\examples",
+  "paletteMode": "default",
+  "itemsPath": "C:\\repos\\grim_fusion\\fixtures\\shared\\items.json",
+  "gleanerRoot": "C:\\repos\\grim_fusion\\vendor\\grim_gleaner",
+  "python": "py -3.13",
+  "updatedAt": "2026-08-13T21:56:22.651Z"
+}

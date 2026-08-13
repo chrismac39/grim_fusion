@@ -65,6 +65,7 @@ def resolve_export_sources(
     """
 
     bundled = Path(bundled_tags_root).expanduser().resolve()
+    bundled_available = bundled.is_dir()
     game_text_root: Path | None = None
     game_files: tuple[str, ...] = ()
     if game_folder is not None and str(game_folder).strip():
@@ -79,7 +80,7 @@ def resolve_export_sources(
     if game_text_root is not None and game_text_root.is_dir():
         return ExportSourceSelection(
             primary_root=game_text_root,
-            fallback_root=bundled,
+            fallback_root=bundled if bundled_available else None,
             game_text_root=game_text_root,
             game_files=game_files,
         )

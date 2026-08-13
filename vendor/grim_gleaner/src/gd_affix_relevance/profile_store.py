@@ -11,6 +11,18 @@ from gd_affix_relevance.io_utils import atomic_write_text
 
 PROFILE_FILE_SCHEMA_VERSION = 4
 SUPPORTED_PROFILE_FILE_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4})
+PROFILE_CORE_KEYS = frozenset(
+    {
+        "schema_version",
+        "name",
+        "weights",
+        "masteries",
+        "skill_weights",
+        "excluded_conversion_sources",
+        "resistance_cap_enabled",
+        "resistance_cap_weights",
+    }
+)
 
 
 class ProfileFormatError(ValueError):
@@ -22,7 +34,23 @@ def save_profile(profile: BuildProfile, path: Path) -> Path:
 
     destination = _with_json_suffix(Path(path))
     destination.parent.mkdir(parents=True, exist_ok=True)
+    passthrough: dict[str, Any] = {}
+    if destination.is_file():
+        try:
+            existing_payload: Any = json.loads(
+                destination.read_text(encoding="utf-8-sig")
+            )
+            if isinstance(existing_payload, dict):
+                passthrough = {
+                    key: value
+                    for key, value in existing_payload.items()
+                    if key not in PROFILE_CORE_KEYS
+                }
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            passthrough = {}
+
     payload = {
+        **passthrough,
         "schema_version": PROFILE_FILE_SCHEMA_VERSION,
         **profile.to_dict(),
     }

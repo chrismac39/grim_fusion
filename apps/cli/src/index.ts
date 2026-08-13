@@ -104,6 +104,12 @@ const CLI_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(CLI_DIR, "..", "..", "..");
 const PLANS_DIR = path.join(REPO_ROOT, "artifacts", "plans");
 const VENDORED_GLEANER_ROOT = path.join(REPO_ROOT, "vendor", "grim_gleaner");
+const GLEANER_PROFILES_ROOT = path.join(
+  VENDORED_GLEANER_ROOT,
+  "artifacts",
+  "profiles"
+);
+const FUSION_PLAN_KEY = "grim_fusion_plan";
 const DEFAULT_GD_PATH =
   process.env.GRIM_DAWN_INSTALL_PATH ??
   "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Grim Dawn";
@@ -720,12 +726,165 @@ function slugify(name: string): string {
   return slug || "plan";
 }
 
+function collectJsonFiles(root: string): string[] {
+  if (!existsSync(root)) {
+    return [];
+  }
+
+  const out: string[] = [];
+  const stack = [root];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    for (const entry of readdirSync(current)) {
+      const full = path.join(current, entry);
+      const stats = statSync(full);
+      if (stats.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      if (stats.isFile() && entry.toLowerCase().endsWith(".json")) {
+        out.push(full);
+      }
+    }
+  }
+
+  return out;
+}
+
+function resolvePlanProfilePath(plan: BuildPlan): string {
+  return resolveProfilePath({
+    command: "run",
+    profilePath: plan.profilePath,
+    profileDir: plan.profileDir,
+  });
+}
+
+function parseEmbeddedPlan(
+  profilePath: string,
+  payload: Record<string, unknown>
+): BuildPlan | undefined {
+  const embedded = payload[FUSION_PLAN_KEY];
+  if (!embedded || typeof embedded !== "object" || Array.isArray(embedded)) {
+    return undefined;
+  }
+
+  const plan = embedded as Partial<BuildPlan>;
+  const profileName =
+    typeof payload.name === "string" && payload.name.trim().length > 0
+      ? payload.name
+      : path.basename(profilePath, path.extname(profilePath));
+
+  const paletteMode = plan.paletteMode === "custom" ? "custom" : "default";
+  const itemsPath =
+    typeof plan.itemsPath === "string" && plan.itemsPath.trim().length > 0
+      ? plan.itemsPath
+      : path.join(REPO_ROOT, "fixtures", "shared", "items.json");
+
+  return {
+    name:
+      typeof plan.name === "string" && plan.name.trim().length > 0
+        ? plan.name
+        : profileName,
+    grimDawnPath:
+      typeof plan.grimDawnPath === "string" && plan.grimDawnPath.trim().length > 0
+        ? plan.grimDawnPath
+        : DEFAULT_GD_PATH,
+    profilePath,
+    profileDir:
+      typeof plan.profileDir === "string" && plan.profileDir.trim().length > 0
+        ? plan.profileDir
+        : undefined,
+    paletteMode,
+    palettePath:
+      paletteMode === "custom" &&
+      typeof plan.palettePath === "string" &&
+      plan.palettePath.trim().length > 0
+        ? plan.palettePath
+        : undefined,
+    itemsPath,
+    gleanerRoot:
+      typeof plan.gleanerRoot === "string" && plan.gleanerRoot.trim().length > 0
+        ? plan.gleanerRoot
+        : VENDORED_GLEANER_ROOT,
+    python:
+      typeof plan.python === "string" && plan.python.trim().length > 0
+        ? plan.python
+        : "py -3.13",
+    updatedAt:
+      typeof plan.updatedAt === "string" && plan.updatedAt.trim().length > 0
+        ? plan.updatedAt
+        : new Date(0).toISOString(),
+    generation:
+      plan.generation && typeof plan.generation === "object"
+        ? (plan.generation as BuildPlan["generation"])
+        : undefined,
+  };
+}
+
+function readEmbeddedPlan(profilePath: string): BuildPlan | undefined {
+  try {
+    const payload = JSON.parse(readFileSync(profilePath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return undefined;
+    }
+    return parseEmbeddedPlan(profilePath, payload);
+  } catch {
+    return undefined;
+  }
+}
+
+function saveEmbeddedPlan(plan: BuildPlan): string {
+  const profilePath = resolvePlanProfilePath(plan);
+  const payload = JSON.parse(readFileSync(profilePath, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error(`Profile file is not a JSON object: ${profilePath}`);
+  }
+
+  const normalized: BuildPlan = {
+    ...plan,
+    profilePath,
+    profileDir: undefined,
+  };
+
+  payload[FUSION_PLAN_KEY] = {
+    name: normalized.name,
+    grimDawnPath: normalized.grimDawnPath,
+    paletteMode: normalized.paletteMode,
+    palettePath: normalized.palettePath,
+    itemsPath: normalized.itemsPath,
+    gleanerRoot: normalized.gleanerRoot,
+    python: normalized.python,
+    updatedAt: normalized.updatedAt,
+    generation: normalized.generation,
+  };
+
+  writeFileSync(profilePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  return profilePath;
+}
+
 function readPlan(file: string): BuildPlan {
   const parsed = JSON.parse(readFileSync(file, "utf8")) as BuildPlan;
   return parsed;
 }
 
 function loadPlans(): BuildPlan[] {
+  const embeddedPlans = collectJsonFiles(GLEANER_PROFILES_ROOT)
+    .map((file) => readEmbeddedPlan(file))
+    .filter((plan): plan is BuildPlan => Boolean(plan));
+
+  if (embeddedPlans.length > 0) {
+    return embeddedPlans.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }
+
   if (!existsSync(PLANS_DIR)) {
     return [];
   }
@@ -736,10 +895,19 @@ function loadPlans(): BuildPlan[] {
 }
 
 function savePlan(plan: BuildPlan): string {
-  mkdirSync(PLANS_DIR, { recursive: true });
-  const file = path.join(PLANS_DIR, `${slugify(plan.name)}.json`);
-  writeFileSync(file, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
-  return file;
+  try {
+    return saveEmbeddedPlan(plan);
+  } catch (error) {
+    mkdirSync(PLANS_DIR, { recursive: true });
+    const file = path.join(PLANS_DIR, `${slugify(plan.name)}.json`);
+    writeFileSync(file, `${JSON.stringify(plan, null, 2)}\n`, "utf8");
+    if (error instanceof Error) {
+      console.warn(
+        `Fell back to artifacts plan storage for '${plan.name}': ${error.message}`
+      );
+    }
+    return file;
+  }
 }
 
 async function choosePlanInteractively(
@@ -764,6 +932,13 @@ function applyPlan(
   plan: BuildPlan,
   forceApply = false
 ): { deployed: boolean; targetFile: string; hash: string } {
+  const profilePathResolved = resolvePlanProfilePath(plan);
+  const planForApply: BuildPlan = {
+    ...plan,
+    profilePath: profilePathResolved,
+    profileDir: undefined,
+  };
+
   const warnings = formatStalenessWarnings(plan);
   if (warnings.length > 0) {
     console.log("Regeneration recommended before apply:");
@@ -772,25 +947,26 @@ function applyPlan(
 
   const fusionArgs: CliArgs = {
     command: "run",
-    profilePath: plan.profilePath,
-    profileDir: plan.profileDir,
-    palettePath: plan.paletteMode === "custom" ? plan.palettePath : undefined,
-    itemsPath: plan.itemsPath,
-    grimDawnPath: plan.grimDawnPath,
+    profilePath: planForApply.profilePath,
+    profileDir: undefined,
+    palettePath:
+      planForApply.paletteMode === "custom" ? planForApply.palettePath : undefined,
+    itemsPath: planForApply.itemsPath,
+    grimDawnPath: planForApply.grimDawnPath,
     forceApply,
   };
 
   const fusionOutput = buildFusionOutput(fusionArgs);
   const deployed = deployToGrimDawn(
     fusionOutput,
-    plan.grimDawnPath,
+    planForApply.grimDawnPath,
     forceApply
   );
 
   const refreshedPlan: BuildPlan = {
-    ...plan,
+    ...planForApply,
     updatedAt: new Date().toISOString(),
-    generation: buildGenerationMetadata(plan, deployed),
+    generation: buildGenerationMetadata(planForApply, deployed),
   };
   savePlan(refreshedPlan);
 
@@ -852,6 +1028,56 @@ async function askYesNo(
   return answer === "y" || answer === "yes";
 }
 
+async function askExistingDirectory(
+  rl: ReturnType<typeof createInterface>,
+  question: string,
+  defaultPath: string
+): Promise<string> {
+  while (true) {
+    const answer = await ask(rl, question);
+    const normalizedAnswer = answer.trim().toLowerCase();
+    const candidate =
+      answer.length === 0 || normalizedAnswer === "y" || normalizedAnswer === "yes"
+        ? resolveUserPath(defaultPath)
+        : resolveUserPath(answer);
+    try {
+      if (statSync(candidate).isDirectory()) {
+        return candidate;
+      }
+    } catch {
+      // fall through to retry message
+    }
+    console.log(`Directory not found: ${candidate}`);
+  }
+}
+
+async function askExistingJsonFile(
+  rl: ReturnType<typeof createInterface>,
+  question: string,
+  defaultPath: string
+): Promise<string> {
+  while (true) {
+    const answer = await ask(rl, question);
+    const normalizedAnswer = answer.trim().toLowerCase();
+    const candidate =
+      answer.length === 0 || normalizedAnswer === "y" || normalizedAnswer === "yes"
+        ? resolveUserPath(defaultPath)
+        : resolveUserPath(answer);
+    try {
+      if (statSync(candidate).isFile() && candidate.toLowerCase().endsWith(".json")) {
+        return candidate;
+      }
+      if (statSync(candidate).isFile()) {
+        console.log(`File is not JSON: ${candidate}`);
+        continue;
+      }
+    } catch {
+      // fall through to retry message
+    }
+    console.log(`JSON file not found: ${candidate}`);
+  }
+}
+
 async function runGuidedSession(args: CliArgs): Promise<void> {
   const rl = createInterface({ input, output });
   try {
@@ -879,6 +1105,7 @@ async function runGuidedSession(args: CliArgs): Promise<void> {
     console.log("Tools look good.");
 
     console.log("2) Profile source for pre-Gleaner gdse-style colorization");
+    console.log("   Press Enter at path prompts to use defaults.");
     const profileModePath = await ask(
       rl,
       "Profile JSON path (leave blank to auto-pick newest in a directory): "
@@ -886,8 +1113,10 @@ async function runGuidedSession(args: CliArgs): Promise<void> {
     const profileDirDefault = path.join(gleanerRoot, "artifacts", "profiles", "examples");
     const profileDir =
       profileModePath.length === 0
-        ? resolveUserPath(
-            (await ask(rl, `Profile directory [${profileDirDefault}]: `)) || profileDirDefault
+        ? await askExistingDirectory(
+            rl,
+            `Profile directory [${profileDirDefault}]: `,
+            profileDirDefault
           )
         : undefined;
     const profilePath =
@@ -900,7 +1129,11 @@ async function runGuidedSession(args: CliArgs): Promise<void> {
       : resolveUserPath(await ask(rl, "Custom palette file path: "));
 
     const itemsDefault = args.itemsPath ?? path.join("fixtures", "shared", "items.json");
-    const itemsPath = resolveUserPath((await ask(rl, `Items JSON path [${itemsDefault}]: `)) || itemsDefault);
+    const itemsPath = await askExistingJsonFile(
+      rl,
+      `Items JSON path [${itemsDefault}]: `,
+      itemsDefault
+    );
 
     console.log(
       "4) Running gdse-style fusion generation/apply before launching grim_gleaner UI."
@@ -925,8 +1158,12 @@ async function runGuidedSession(args: CliArgs): Promise<void> {
     const plan: BuildPlan = {
       name: suggestedPlanName,
       grimDawnPath,
-      profilePath,
-      profileDir,
+      profilePath: resolveProfilePath({
+        command: "run",
+        profilePath,
+        profileDir,
+      }),
+      profileDir: undefined,
       paletteMode: useDefaultPalette ? "default" : "custom",
       palettePath,
       itemsPath,
