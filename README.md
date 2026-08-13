@@ -43,12 +43,6 @@ The editable install target is `vendor\grim_gleaner` by default.
 By default it uses the vendored copy at `vendor\grim_gleaner` inside this repo.
 No sibling-repo lookup is required.
 
-You can still override with `GRIM_GLEANER_ROOT` if needed:
-
-```powershell
-setx GRIM_GLEANER_ROOT "C:\path\to\grim_gleaner"
-```
-
 You can rerun bootstrap manually at any time:
 
 ```powershell

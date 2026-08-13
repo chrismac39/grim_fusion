@@ -74,11 +74,6 @@ function ensurePython313() {
 }
 
 function resolveGleanerRoot() {
-  const fromEnv = process.env.GRIM_GLEANER_ROOT;
-  if (fromEnv && existsSync(fromEnv)) {
-    return path.resolve(fromEnv);
-  }
-
   if (existsSync(VENDORED_GLEANER_ROOT)) {
     return VENDORED_GLEANER_ROOT;
   }

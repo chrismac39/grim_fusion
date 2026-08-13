@@ -35,7 +35,6 @@ type CliArgs = {
   palettePath?: string;
   itemsPath?: string;
   outPath?: string;
-  gleanerRoot?: string;
   python?: string;
   grimDawnPath?: string;
   planName?: string;
@@ -176,9 +175,6 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case "--out":
         out.outPath = value;
-        break;
-      case "--gleaner-root":
-        out.gleanerRoot = value;
         break;
       case "--python":
         out.python = value;
@@ -483,9 +479,7 @@ function runFusion(args: CliArgs): void {
 }
 
 function launchGleanerUi(args: CliArgs): void {
-  const gleanerRoot = args.gleanerRoot
-    ? resolveUserPath(args.gleanerRoot)
-    : VENDORED_GLEANER_ROOT;
+  const gleanerRoot = VENDORED_GLEANER_ROOT;
   const runtime = detectPythonRuntime(args.python);
   const env = {
     ...process.env,
@@ -837,7 +831,7 @@ async function runGuidedSession(args: CliArgs): Promise<void> {
     );
     const grimDawnPath = resolveUserPath(grimDawnPathAnswer || args.grimDawnPath || DEFAULT_GD_PATH);
 
-    const gleanerRoot = resolveUserPath(args.gleanerRoot ?? VENDORED_GLEANER_ROOT);
+    const gleanerRoot = VENDORED_GLEANER_ROOT;
     const runtime = detectPythonRuntime(args.python);
 
     console.log("Checking tools and dependencies...");
@@ -847,7 +841,6 @@ async function runGuidedSession(args: CliArgs): Promise<void> {
     console.log("2) Launching grim_gleaner UI. Save your build profile, then close the UI.");
     launchGleanerUi({
       ...args,
-      gleanerRoot,
       python: args.python,
       command: "run-with-gleaner",
     });
@@ -960,11 +953,10 @@ function printUsage(): void {
   console.log("grim-fusion usage:");
   console.log("  npm run dev -- --example");
   console.log("  npm run dev -- session [--grim-dawn-path <path>] [--items <items.json>] [--plan-name <name>] [--force-apply]");
-  console.log("    (uses vendor/grim_gleaner by default; override with --gleaner-root if needed)");
   console.log("  npm run dev -- apply-plan [--plan-name <name>] [--force-apply]");
   console.log("  npm run dev -- run --profile <profile.json> --items <items.json> [--palette <gdse-palette.txt>] [--out <output.json>]");
   console.log("  npm run dev -- run --profile-dir <dir> --items <items.json> [--palette <gdse-palette.txt>] [--out <output.json>]");
-  console.log("  npm run dev -- run-with-gleaner --gleaner-root <path-to-grim_gleaner> --profile <profile.json> --items <items.json> [--palette <gdse-palette.txt>] [--out <output.json>]");
+  console.log("  npm run dev -- run-with-gleaner --profile <profile.json> --items <items.json> [--palette <gdse-palette.txt>] [--out <output.json>]");
   console.log("  npm run dev -- run-with-gleaner --profile-dir <dir-with-profile-json> --items <items.json> [--palette <gdse-palette.txt>]");
 }
 
