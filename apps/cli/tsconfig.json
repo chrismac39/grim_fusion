@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "references": [
+    { "path": "../../packages/core-model" },
+    { "path": "../../packages/color-engine" },
+    { "path": "../../packages/scoring-engine" },
+    { "path": "../../packages/tag-composer" }
+  ],
+  "include": ["src/**/*.ts"]
+}

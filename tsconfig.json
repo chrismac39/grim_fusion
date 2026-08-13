@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.base.json",
+  "files": [],
+  "references": [
+    { "path": "packages/core-model" },
+    { "path": "packages/color-engine" },
+    { "path": "packages/scoring-engine" },
+    { "path": "packages/tag-composer" },
+    { "path": "apps/cli" }
+  ]
+}

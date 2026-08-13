@@ -1,0 +1,20 @@
+{
+  "name": "@grim-fusion/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "grim-fusion": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rimraf dist",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@grim-fusion/color-engine": "0.1.0",
+    "@grim-fusion/core-model": "0.1.0",
+    "@grim-fusion/scoring-engine": "0.1.0",
+    "@grim-fusion/tag-composer": "0.1.0"
+  }
+}

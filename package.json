@@ -1,0 +1,23 @@
+{
+  "name": "grim-fusion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript monorepo to merge gdse colorization with grim_gleaner build scoring.",
+  "packageManager": "npm@10",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "dev": "npm run --workspace @grim-fusion/cli dev --",
+    "typecheck": "tsc -b"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "rimraf": "^6.0.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.2"
+  }
+}
