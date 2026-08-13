@@ -481,8 +481,13 @@ function runFusion(args: CliArgs): void {
 function launchGleanerUi(args: CliArgs): void {
   const gleanerRoot = VENDORED_GLEANER_ROOT;
   const runtime = detectPythonRuntime(args.python);
+  const configuredGrimDawnPath = resolveUserPath(
+    args.grimDawnPath || DEFAULT_GD_PATH
+  );
   const env = {
     ...process.env,
+    GRIM_DAWN_INSTALL_PATH:
+      process.env.GRIM_DAWN_INSTALL_PATH || configuredGrimDawnPath,
     PYTHONPATH: [path.join(gleanerRoot, "src"), process.env.PYTHONPATH ?? ""]
       .filter(Boolean)
       .join(process.platform === "win32" ? ";" : ":"),
@@ -825,11 +830,19 @@ async function runGuidedSession(args: CliArgs): Promise<void> {
   try {
     console.log("grim_fusion guided session");
 
-    const grimDawnPathAnswer = await ask(
-      rl,
-      `1) Grim Dawn install path [${args.grimDawnPath ?? DEFAULT_GD_PATH}]: `
+    const configuredGrimDawnPath = resolveUserPath(
+      args.grimDawnPath || DEFAULT_GD_PATH
     );
-    const grimDawnPath = resolveUserPath(grimDawnPathAnswer || args.grimDawnPath || DEFAULT_GD_PATH);
+    let grimDawnPath = configuredGrimDawnPath;
+    if (existsSync(configuredGrimDawnPath)) {
+      console.log(`1) Grim Dawn install path: ${configuredGrimDawnPath}`);
+    } else {
+      const grimDawnPathAnswer = await ask(
+        rl,
+        `1) Grim Dawn install path not found at ${configuredGrimDawnPath}. Enter path: `
+      );
+      grimDawnPath = resolveUserPath(grimDawnPathAnswer);
+    }
 
     const gleanerRoot = VENDORED_GLEANER_ROOT;
     const runtime = detectPythonRuntime(args.python);
@@ -841,6 +854,7 @@ async function runGuidedSession(args: CliArgs): Promise<void> {
     console.log("2) Launching grim_gleaner UI. Save your build profile, then close the UI.");
     launchGleanerUi({
       ...args,
+      grimDawnPath,
       python: args.python,
       command: "run-with-gleaner",
     });

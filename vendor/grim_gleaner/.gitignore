@@ -1,0 +1,25 @@
+.vscode/
+.venv/
+.venv-build/
+.codex/
+.kilo/
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+build/
+dist/
+docs/
+
+artifacts/*
+!artifacts/profiles/
+artifacts/profiles/*
+!artifacts/profiles/examples/
+!artifacts/profiles/examples/**
+!artifacts/catalog/
+!artifacts/catalog/**
+
+# Locally extracted proprietary Grim Dawn data.
+game_data/

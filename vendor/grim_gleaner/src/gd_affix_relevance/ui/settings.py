@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QSettings, Signal
@@ -20,6 +21,10 @@ from PySide6.QtWidgets import (
 from gd_affix_relevance.grade_export import validate_grim_dawn_folder
 
 GAME_FOLDER_SETTING = "paths/grim_dawn_folder"
+GAME_FOLDER_ENV = "GRIM_DAWN_INSTALL_PATH"
+WINDOWS_DEFAULT_GAME_FOLDER = (
+    r"C:\Program Files (x86)\Steam\steamapps\common\Grim Dawn"
+)
 
 
 class SettingsPage(QWidget):
@@ -89,19 +94,51 @@ class SettingsPage(QWidget):
         layout.addStretch()
         self._refresh_game_folder_status()
 
+    @staticmethod
+    def _sanitize_path(value: str) -> str:
+        trimmed = value.strip()
+        if (
+            len(trimmed) >= 2
+            and trimmed[0] == trimmed[-1]
+            and trimmed[0] in {'"', "'"}
+        ):
+            return trimmed[1:-1].strip()
+        return trimmed
+
     def _saved_game_folder(self) -> str:
+        stored = ""
+        if self.settings is not None:
+            stored = self._sanitize_path(
+                self.settings.value(GAME_FOLDER_SETTING, "", type=str)
+            )
+        if stored:
+            self._persist_game_folder(stored)
+            return stored
+
+        env_path = self._sanitize_path(os.environ.get(GAME_FOLDER_ENV, ""))
+        if env_path and Path(env_path).exists():
+            self._persist_game_folder(env_path)
+            return env_path
+
+        if Path(WINDOWS_DEFAULT_GAME_FOLDER).exists():
+            self._persist_game_folder(WINDOWS_DEFAULT_GAME_FOLDER)
+            return WINDOWS_DEFAULT_GAME_FOLDER
+
+        return ""
+
+    def _persist_game_folder(self, value: str) -> None:
         if self.settings is None:
-            return ""
-        return self.settings.value(GAME_FOLDER_SETTING, "", type=str)
+            return
+        if value:
+            self.settings.setValue(GAME_FOLDER_SETTING, value)
+        else:
+            self.settings.remove(GAME_FOLDER_SETTING)
+        self.settings.sync()
 
     def _save_game_folder(self) -> None:
-        value = self.game_folder_edit.text().strip()
-        if self.settings is not None:
-            if value:
-                self.settings.setValue(GAME_FOLDER_SETTING, value)
-            else:
-                self.settings.remove(GAME_FOLDER_SETTING)
-            self.settings.sync()
+        value = self._sanitize_path(self.game_folder_edit.text())
+        self.game_folder_edit.setText(value)
+        self._persist_game_folder(value)
         self._refresh_game_folder_status()
         self.game_folder_changed.emit(value)
 
