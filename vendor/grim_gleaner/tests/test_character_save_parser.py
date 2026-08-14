@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import zlib
 
 from gd_affix_relevance.importers.character_save_parser import (
     describe_gdstash_compatibility,
     extract_skill_references,
+    parse_character_save,
 )
 
 
@@ -59,6 +61,42 @@ def test_extract_skill_references_reads_player_companion_chunks(
     assert references == (
         "records/skills/playerclass03/curse1.dbr",
         "records/skills/playerclass10/werewolf1.dbr",
+    )
+
+
+def test_parse_character_save_extracts_references_from_compressed_block(
+    tmp_path: Path,
+) -> None:
+    reference = b"records/skills/playerclass08/shamanstrike1.dbr"
+    payload = b"prefix" + zlib.compress(reference + b"\x00") + b"suffix"
+    source = tmp_path / "player.gdc"
+    source.write_bytes(payload)
+
+    result = parse_character_save(source)
+
+    assert result.references == (
+        "records/skills/playerclass08/shamanstrike1.dbr",
+    )
+    assert result.metadata.references_found == 1
+    assert result.metadata.confidence > 0.4
+
+
+def test_parse_character_save_reports_partial_parse_and_diagnostics(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "player.gdc"
+    source.write_bytes(b"not-a-gd-save")
+
+    result = parse_character_save(source)
+
+    assert result.references == ()
+    assert result.metadata.partial_parse
+    assert result.metadata.references_found == 0
+    assert result.metadata.files_scanned == ("player.gdc",)
+    assert result.metadata.confidence < 0.5
+    assert any(
+        diag.code == "unknown_character_version"
+        for diag in result.metadata.diagnostics
     )
 
 
