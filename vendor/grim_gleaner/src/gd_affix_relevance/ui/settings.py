@@ -22,6 +22,7 @@ from gd_affix_relevance.grade_export import validate_grim_dawn_folder
 
 GAME_FOLDER_SETTING = "paths/grim_dawn_folder"
 CHARACTER_SAVE_ROOT_SETTING = "paths/character_save_root"
+GRIM_SAVE_PARSER_ROOT_SETTING = "paths/grim_save_parser_root"
 GAME_FOLDER_ENV = "GRIM_DAWN_INSTALL_PATH"
 WINDOWS_DEFAULT_GAME_FOLDER = (
     r"C:\Program Files (x86)\Steam\steamapps\common\Grim Dawn"
@@ -75,6 +76,17 @@ def detect_default_character_save_root(game_folder: Path | None = None) -> Path:
     if cloud_candidates:
         return cloud_candidates[0]
     return Path.home() / "Documents" / "My Games" / "Grim Dawn" / "save"
+
+
+def detect_default_grim_save_parser_root() -> Path:
+    candidates = (
+        Path(r"C:\repos\grim-save-parser"),
+        Path(__file__).resolve().parents[4] / "vendor" / "grim-save-parser",
+    )
+    for candidate in candidates:
+        if (candidate / "Cargo.toml").is_file():
+            return candidate
+    return candidates[0]
 
 
 class SettingsPage(QWidget):
@@ -144,6 +156,28 @@ class SettingsPage(QWidget):
         self.browse_save_button.clicked.connect(self._browse_character_save_root)
         save_layout.addWidget(self.browse_save_button)
         form.addRow("Character save folder", save_row)
+
+        self.grim_save_parser_root_edit = QLineEdit(
+            self._saved_grim_save_parser_root(),
+            self,
+        )
+        self.grim_save_parser_root_edit.setObjectName("outputPath")
+        self.grim_save_parser_root_edit.setPlaceholderText(
+            r"Example: C:\repos\grim-save-parser"
+        )
+        self.grim_save_parser_root_edit.editingFinished.connect(
+            self._save_grim_save_parser_root
+        )
+        parser_row = QWidget(self)
+        parser_layout = QHBoxLayout(parser_row)
+        parser_layout.setContentsMargins(0, 0, 0, 0)
+        parser_layout.setSpacing(8)
+        parser_layout.addWidget(self.grim_save_parser_root_edit, 1)
+        self.browse_parser_button = QPushButton("Browse...", parser_row)
+        self.browse_parser_button.setObjectName("profileAction")
+        self.browse_parser_button.clicked.connect(self._browse_grim_save_parser_root)
+        parser_layout.addWidget(self.browse_parser_button)
+        form.addRow("Grim save parser root", parser_row)
         layout.addLayout(form)
 
         self.game_folder_status = QLabel(self)
@@ -153,6 +187,10 @@ class SettingsPage(QWidget):
         self.character_save_root_status = QLabel(self)
         self.character_save_root_status.setWordWrap(True)
         layout.addWidget(self.character_save_root_status)
+
+        self.grim_save_parser_root_status = QLabel(self)
+        self.grim_save_parser_root_status.setWordWrap(True)
+        layout.addWidget(self.grim_save_parser_root_status)
 
         note = QLabel(
             "Export Grades checks this folder's settings/text_en directory for "
@@ -167,6 +205,7 @@ class SettingsPage(QWidget):
         layout.addStretch()
         self._refresh_game_folder_status()
         self._refresh_character_save_root_status()
+        self._refresh_grim_save_parser_root_status()
 
     @staticmethod
     def _sanitize_path(value: str) -> str:
@@ -226,6 +265,29 @@ class SettingsPage(QWidget):
             self.settings.setValue(CHARACTER_SAVE_ROOT_SETTING, value)
         else:
             self.settings.remove(CHARACTER_SAVE_ROOT_SETTING)
+        self.settings.sync()
+
+    def _saved_grim_save_parser_root(self) -> str:
+        stored = ""
+        if self.settings is not None:
+            stored = self._sanitize_path(
+                self.settings.value(GRIM_SAVE_PARSER_ROOT_SETTING, "", type=str)
+            )
+        if stored:
+            self._persist_grim_save_parser_root(stored)
+            return stored
+
+        detected = detect_default_grim_save_parser_root()
+        self._persist_grim_save_parser_root(str(detected))
+        return str(detected)
+
+    def _persist_grim_save_parser_root(self, value: str) -> None:
+        if self.settings is None:
+            return
+        if value:
+            self.settings.setValue(GRIM_SAVE_PARSER_ROOT_SETTING, value)
+        else:
+            self.settings.remove(GRIM_SAVE_PARSER_ROOT_SETTING)
         self.settings.sync()
 
     def _save_game_folder(self) -> None:
@@ -289,6 +351,26 @@ class SettingsPage(QWidget):
         self.character_save_root_edit.setText(selected)
         self._save_character_save_root()
 
+    def _save_grim_save_parser_root(self) -> None:
+        value = self._sanitize_path(self.grim_save_parser_root_edit.text())
+        self.grim_save_parser_root_edit.setText(value)
+        self._persist_grim_save_parser_root(value)
+        self._refresh_grim_save_parser_root_status()
+
+    def _browse_grim_save_parser_root(self) -> None:
+        starting_path = (
+            self.grim_save_parser_root_edit.text().strip() or str(Path.cwd())
+        )
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "Select Grim Save Parser Repository Root",
+            starting_path,
+        )
+        if not selected:
+            return
+        self.grim_save_parser_root_edit.setText(selected)
+        self._save_grim_save_parser_root()
+
     def has_valid_game_folder(self) -> bool:
         game, _ = self._game_folder_validation()
         return game is not None
@@ -332,6 +414,32 @@ class SettingsPage(QWidget):
         )
         self.character_save_root_status.style().polish(
             self.character_save_root_status
+        )
+
+    def _refresh_grim_save_parser_root_status(self) -> None:
+        value = self.grim_save_parser_root_edit.text().strip()
+        if not value:
+            self.grim_save_parser_root_status.setObjectName("gameFolderWarning")
+            self.grim_save_parser_root_status.setText(
+                "Grim save parser root not configured. Character import will use built-in fallback scanning only."
+            )
+        else:
+            root = Path(value)
+            if (root / "Cargo.toml").is_file():
+                self.grim_save_parser_root_status.setObjectName("gameFolderConfirmed")
+                self.grim_save_parser_root_status.setText(
+                    f"Detected grim-save-parser project: {root}"
+                )
+            else:
+                self.grim_save_parser_root_status.setObjectName("gameFolderWarning")
+                self.grim_save_parser_root_status.setText(
+                    "Not confirmed: expected Cargo.toml at parser root. Built-in fallback scanning will still be used."
+                )
+        self.grim_save_parser_root_status.style().unpolish(
+            self.grim_save_parser_root_status
+        )
+        self.grim_save_parser_root_status.style().polish(
+            self.grim_save_parser_root_status
         )
 
     def _game_folder_validation(self) -> tuple[Path | None, str]:

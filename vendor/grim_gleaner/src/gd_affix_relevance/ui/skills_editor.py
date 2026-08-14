@@ -494,10 +494,12 @@ class SkillsEditor(QWidget):
     def import_from_character_save(
         self,
         save_path: Path,
+        *,
+        parser_root: Path | None = None,
     ) -> CharacterSaveImportSummary:
         """Populate masteries and build-relevant skills from a character save."""
 
-        references = extract_skill_references(save_path)
+        references = extract_skill_references(save_path, parser_root=parser_root)
         resolved_pairs = [
             (reference, self._resolve_import_skill_id(reference))
             for reference in references

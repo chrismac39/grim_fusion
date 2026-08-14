@@ -25,6 +25,7 @@ from gd_affix_relevance.profile_store import load_profile, save_profile
 from gd_affix_relevance.ui.catalog import PROFILE_TABS, TabDefinition
 from gd_affix_relevance.ui.settings import (
     CHARACTER_SAVE_ROOT_SETTING,
+    GRIM_SAVE_PARSER_ROOT_SETTING,
     detect_default_character_save_root,
     sanitize_path,
 )
@@ -352,6 +353,17 @@ class ProfileEditor(QWidget):
             if configured
             else detect_default_character_save_root()
         )
+        parser_root: Path | None = None
+        if self.settings is not None:
+            configured_parser_root = sanitize_path(
+                self.settings.value(
+                    GRIM_SAVE_PARSER_ROOT_SETTING,
+                    "",
+                    type=str,
+                )
+            )
+            if configured_parser_root:
+                parser_root = Path(configured_parser_root)
         selected, _ = QFileDialog.getOpenFileName(
             self,
             "Import Character Save",
@@ -362,7 +374,10 @@ class ProfileEditor(QWidget):
             return
 
         try:
-            summary = self.skills_editor.import_from_character_save(Path(selected))
+            summary = self.skills_editor.import_from_character_save(
+                Path(selected),
+                parser_root=parser_root,
+            )
         except (OSError, ValueError, TypeError) as error:
             QMessageBox.critical(
                 self,
