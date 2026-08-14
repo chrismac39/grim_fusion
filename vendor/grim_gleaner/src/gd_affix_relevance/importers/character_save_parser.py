@@ -1,4 +1,4 @@
-"""Best-effort extraction of learned skill references from Grim Dawn save files."""
+"""GDStash-style character-save parsing and skill reference extraction."""
 
 from __future__ import annotations
 
@@ -19,6 +19,33 @@ SKILL_REFERENCE_TEXT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 GDSTASH_SUPPORTED_CHARACTER_VERSIONS = frozenset({6, 7, 8})
+
+
+@dataclass(frozen=True, slots=True)
+class ParseDiagnostic:
+    severity: str
+    code: str
+    message: str
+    source_file: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class CharacterSaveParseMetadata:
+    character_version: int | None
+    supported_by_gdstash: bool | None
+    source: str
+    files_scanned: tuple[str, ...]
+    bytes_scanned: int
+    references_found: int
+    partial_parse: bool
+    confidence: float
+    diagnostics: tuple[ParseDiagnostic, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CharacterSaveParseResult:
+    references: tuple[str, ...]
+    metadata: CharacterSaveParseMetadata
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,24 +78,127 @@ def extract_skill_references(
     *,
     parser_root: Path | None = None,
 ) -> tuple[str, ...]:
-    """Return unique skill DBR references found in *save_path* bytes.
+    """Return unique skill DBR references extracted from *save_path*."""
 
-    The result is normalized to lowercase forward-slash record paths.
-    """
+    return parse_character_save(save_path, parser_root=parser_root).references
+
+
+def parse_character_save(
+    save_path: Path,
+    *,
+    parser_root: Path | None = None,
+) -> CharacterSaveParseResult:
+    """Parse a Grim Dawn character save into references plus diagnostics."""
 
     source = Path(save_path).expanduser().resolve()
     if not source.is_file():
         raise ValueError(f"character save file does not exist: {source}")
 
-    found: set[str] = set()
-    for file_path in _candidate_character_files(source):
-        raw = file_path.read_bytes()
-        for view in _candidate_byte_views(raw):
+    gdstash_root = _resolve_gdstash_root(parser_root)
+    source_text = (
+        f"{gdstash_root / 'GDStash.jar'}"
+        if gdstash_root is not None
+        else "bundled compatibility profile"
+    )
+    character_version = _decode_character_version(source)
+    supported = (
+        character_version in GDSTASH_SUPPORTED_CHARACTER_VERSIONS
+        if character_version is not None
+        else None
+    )
+
+    diagnostics: list[ParseDiagnostic] = []
+    if character_version is None:
+        diagnostics.append(
+            ParseDiagnostic(
+                severity="warning",
+                code="unknown_character_version",
+                message=(
+                    "Could not decode character format version from player.gdc. "
+                    "Continuing with best-effort block scanning."
+                ),
+                source_file="player.gdc",
+            )
+        )
+    elif not supported:
+        diagnostics.append(
+            ParseDiagnostic(
+                severity="warning",
+                code="unsupported_character_version",
+                message=(
+                    "Character format version is outside GDStash's known support "
+                    "window; partial parsing is expected."
+                ),
+                source_file="player.gdc",
+            )
+        )
+
+    files = _candidate_character_files(source)
+    references: set[str] = set()
+    bytes_scanned = 0
+    files_scanned: list[str] = []
+    for file_path in files:
+        files_scanned.append(file_path.name)
+        try:
+            raw = file_path.read_bytes()
+        except OSError as error:
+            diagnostics.append(
+                ParseDiagnostic(
+                    severity="error",
+                    code="read_error",
+                    message=f"Could not read save chunk: {error}",
+                    source_file=file_path.name,
+                )
+            )
+            continue
+        bytes_scanned += len(raw)
+        for view in _candidate_byte_views(raw, diagnostics, file_path):
             for match in SKILL_REFERENCE_PATTERN.finditer(view):
                 text = match.group().decode("ascii", "ignore")
                 for parsed in _extract_text_references(text):
-                    found.add(_normalize_record_reference(parsed))
-    return tuple(sorted(reference for reference in found if reference))
+                    references.add(_normalize_record_reference(parsed))
+
+    normalized = tuple(sorted(reference for reference in references if reference))
+    companion_count = len(
+        [name for name in files_scanned if name.casefold() != "player.gdc"]
+    )
+    if not normalized and companion_count == 0:
+        diagnostics.append(
+            ParseDiagnostic(
+                severity="warning",
+                code="packed_save_without_companions",
+                message=(
+                    "Character folder has no player.g00/player.g01 companion chunks; "
+                    "packed saves may omit extractable skill DBR references."
+                ),
+                source_file="player.gdc",
+            )
+        )
+
+    partial_parse = (
+        not normalized
+        or supported is False
+        or any(diag.severity == "error" for diag in diagnostics)
+    )
+    confidence = _parse_confidence(
+        reference_count=len(normalized),
+        supported=supported,
+        partial_parse=partial_parse,
+        diagnostics=diagnostics,
+        companion_count=companion_count,
+    )
+    metadata = CharacterSaveParseMetadata(
+        character_version=character_version,
+        supported_by_gdstash=supported,
+        source=source_text,
+        files_scanned=tuple(files_scanned),
+        bytes_scanned=bytes_scanned,
+        references_found=len(normalized),
+        partial_parse=partial_parse,
+        confidence=confidence,
+        diagnostics=tuple(diagnostics),
+    )
+    return CharacterSaveParseResult(references=normalized, metadata=metadata)
 
 
 def describe_gdstash_compatibility(
@@ -117,7 +247,11 @@ def _candidate_character_files(source: Path) -> tuple[Path, ...]:
     return tuple(dict.fromkeys(files))
 
 
-def _candidate_byte_views(raw: bytes) -> tuple[bytes, ...]:
+def _candidate_byte_views(
+    raw: bytes,
+    diagnostics: list[ParseDiagnostic],
+    source_file: Path,
+) -> tuple[bytes, ...]:
     # Some save sections may encode paths with interleaved null bytes (UTF-16-like).
     # Scanning both views catches those without needing a full save decoder.
     views: list[bytes] = [raw]
@@ -126,7 +260,7 @@ def _candidate_byte_views(raw: bytes) -> tuple[bytes, ...]:
     if compact != raw:
         views.append(compact)
 
-    for inflated in _inflated_byte_views(raw):
+    for inflated in _inflated_byte_views(raw, diagnostics, source_file):
         views.append(inflated)
         inflated_compact = inflated.replace(b"\x00", b"")
         if inflated_compact != inflated:
@@ -135,7 +269,11 @@ def _candidate_byte_views(raw: bytes) -> tuple[bytes, ...]:
     return tuple(views)
 
 
-def _inflated_byte_views(raw: bytes) -> tuple[bytes, ...]:
+def _inflated_byte_views(
+    raw: bytes,
+    diagnostics: list[ParseDiagnostic],
+    source_file: Path,
+) -> tuple[bytes, ...]:
     """Return best-effort zlib-inflated payloads from a binary save blob."""
 
     outputs: list[bytes] = []
@@ -143,6 +281,7 @@ def _inflated_byte_views(raw: bytes) -> tuple[bytes, ...]:
     max_candidates = 128
     max_output_size = 8 * 1024 * 1024
 
+    failures = 0
     for index, byte in enumerate(raw):
         if byte != 0x78:
             continue
@@ -152,15 +291,53 @@ def _inflated_byte_views(raw: bytes) -> tuple[bytes, ...]:
             stream = zlib.decompressobj()
             inflated = stream.decompress(raw[index:], max_output_size)
         except zlib.error:
+            failures += 1
             continue
-        if len(inflated) < 64:
+        if len(inflated) < 24:
             continue
         if inflated in seen:
             continue
         seen.add(inflated)
         outputs.append(inflated)
 
+    if failures and not outputs:
+        diagnostics.append(
+            ParseDiagnostic(
+                severity="info",
+                code="zlib_scan_no_payload",
+                message=(
+                    "Detected compressed-looking blocks but no usable zlib payload "
+                    "could be inflated."
+                ),
+                source_file=source_file.name,
+            )
+        )
+
     return tuple(outputs)
+
+
+def _parse_confidence(
+    *,
+    reference_count: int,
+    supported: bool | None,
+    partial_parse: bool,
+    diagnostics: list[ParseDiagnostic],
+    companion_count: int,
+) -> float:
+    score = 0.25
+    if reference_count > 0:
+        score += 0.45
+    if companion_count > 0:
+        score += 0.1
+    if supported is True:
+        score += 0.15
+    if supported is False:
+        score -= 0.2
+    if partial_parse:
+        score -= 0.15
+    if any(diag.severity == "error" for diag in diagnostics):
+        score -= 0.2
+    return max(0.0, min(1.0, round(score, 3)))
 
 
 def _resolve_gdstash_root(parser_root: Path | None) -> Path | None:
