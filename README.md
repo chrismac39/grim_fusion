@@ -1,8 +1,9 @@
 # grim-fusion
 
-TypeScript monorepo that merges two Grim Dawn modding ideas:
-- Rainbow filter inspired gdse-style automated item  colorization
-- grim_gleaner-style build relevance grading (F through S++)
+TypeScript monorepo that merges several Grim Dawn modding ideas:
+- [GDSE](https://github.com/gregates/gdse) inspired automated item  colorization
+- [Grim Gleaner](https://github.com/kultcher/grim_gleaner) style build relevance grading (F through S++)
+- [GDStash](https://forums.crateentertainment.com/t/tool-gd-stash/29036) inspiration for savefile parsing logic
 
 ## Monorepo layout
 
