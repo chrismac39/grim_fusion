@@ -22,7 +22,9 @@ from gd_affix_relevance.grade_export import validate_grim_dawn_folder
 
 GAME_FOLDER_SETTING = "paths/grim_dawn_folder"
 CHARACTER_SAVE_ROOT_SETTING = "paths/character_save_root"
-GRIM_SAVE_PARSER_ROOT_SETTING = "paths/grim_save_parser_root"
+GDSTASH_ROOT_SETTING = "paths/gdstash_root"
+GRIM_FUSION_ROOT_SETTING = "paths/grim_fusion_root"
+NPM_COMMAND_SETTING = "tools/npm_command"
 GAME_FOLDER_ENV = "GRIM_DAWN_INSTALL_PATH"
 WINDOWS_DEFAULT_GAME_FOLDER = (
     r"C:\Program Files (x86)\Steam\steamapps\common\Grim Dawn"
@@ -78,15 +80,28 @@ def detect_default_character_save_root(game_folder: Path | None = None) -> Path:
     return Path.home() / "Documents" / "My Games" / "Grim Dawn" / "save"
 
 
-def detect_default_grim_save_parser_root() -> Path:
+def detect_default_gdstash_root() -> Path:
     candidates = (
-        Path(r"C:\repos\grim-save-parser"),
-        Path(__file__).resolve().parents[4] / "vendor" / "grim-save-parser",
+        Path(r"C:\GDStash"),
+        Path(r"C:\Program Files\GDStash"),
     )
     for candidate in candidates:
-        if (candidate / "Cargo.toml").is_file():
+        if (candidate / "GDStash.jar").is_file():
             return candidate
     return candidates[0]
+
+
+def detect_default_grim_fusion_root() -> Path:
+    candidates = (
+        Path(__file__).resolve().parents[5],
+        Path(r"C:\repos\grim_fusion"),
+    )
+    for candidate in candidates:
+        if (candidate / "package.json").is_file() and (
+            candidate / "apps" / "cli" / "package.json"
+        ).is_file():
+            return candidate
+    return candidates[1]
 
 
 class SettingsPage(QWidget):
@@ -157,27 +172,55 @@ class SettingsPage(QWidget):
         save_layout.addWidget(self.browse_save_button)
         form.addRow("Character save folder", save_row)
 
-        self.grim_save_parser_root_edit = QLineEdit(
-            self._saved_grim_save_parser_root(),
+        self.gdstash_root_edit = QLineEdit(
+            self._saved_gdstash_root(),
             self,
         )
-        self.grim_save_parser_root_edit.setObjectName("outputPath")
-        self.grim_save_parser_root_edit.setPlaceholderText(
-            r"Example: C:\repos\grim-save-parser"
+        self.gdstash_root_edit.setObjectName("outputPath")
+        self.gdstash_root_edit.setPlaceholderText(
+            r"Example: C:\GDStash"
         )
-        self.grim_save_parser_root_edit.editingFinished.connect(
-            self._save_grim_save_parser_root
+        self.gdstash_root_edit.editingFinished.connect(
+            self._save_gdstash_root
         )
         parser_row = QWidget(self)
         parser_layout = QHBoxLayout(parser_row)
         parser_layout.setContentsMargins(0, 0, 0, 0)
         parser_layout.setSpacing(8)
-        parser_layout.addWidget(self.grim_save_parser_root_edit, 1)
+        parser_layout.addWidget(self.gdstash_root_edit, 1)
         self.browse_parser_button = QPushButton("Browse...", parser_row)
         self.browse_parser_button.setObjectName("profileAction")
-        self.browse_parser_button.clicked.connect(self._browse_grim_save_parser_root)
+        self.browse_parser_button.clicked.connect(self._browse_gdstash_root)
         parser_layout.addWidget(self.browse_parser_button)
-        form.addRow("Grim save parser root", parser_row)
+        form.addRow("GDStash root (optional)", parser_row)
+
+        self.grim_fusion_root_edit = QLineEdit(
+            self._saved_grim_fusion_root(),
+            self,
+        )
+        self.grim_fusion_root_edit.setObjectName("outputPath")
+        self.grim_fusion_root_edit.setPlaceholderText(
+            r"Example: C:\repos\grim_fusion"
+        )
+        self.grim_fusion_root_edit.editingFinished.connect(
+            self._save_grim_fusion_root
+        )
+        fusion_row = QWidget(self)
+        fusion_layout = QHBoxLayout(fusion_row)
+        fusion_layout.setContentsMargins(0, 0, 0, 0)
+        fusion_layout.setSpacing(8)
+        fusion_layout.addWidget(self.grim_fusion_root_edit, 1)
+        self.browse_fusion_button = QPushButton("Browse...", fusion_row)
+        self.browse_fusion_button.setObjectName("profileAction")
+        self.browse_fusion_button.clicked.connect(self._browse_grim_fusion_root)
+        fusion_layout.addWidget(self.browse_fusion_button)
+        form.addRow("grim_fusion repo root", fusion_row)
+
+        self.npm_command_edit = QLineEdit(self._saved_npm_command(), self)
+        self.npm_command_edit.setObjectName("outputPath")
+        self.npm_command_edit.setPlaceholderText("Example: npm or C:\\Program Files\\nodejs\\npm.cmd")
+        self.npm_command_edit.editingFinished.connect(self._save_npm_command)
+        form.addRow("npm command", self.npm_command_edit)
         layout.addLayout(form)
 
         self.game_folder_status = QLabel(self)
@@ -188,9 +231,17 @@ class SettingsPage(QWidget):
         self.character_save_root_status.setWordWrap(True)
         layout.addWidget(self.character_save_root_status)
 
-        self.grim_save_parser_root_status = QLabel(self)
-        self.grim_save_parser_root_status.setWordWrap(True)
-        layout.addWidget(self.grim_save_parser_root_status)
+        self.gdstash_root_status = QLabel(self)
+        self.gdstash_root_status.setWordWrap(True)
+        layout.addWidget(self.gdstash_root_status)
+
+        self.grim_fusion_root_status = QLabel(self)
+        self.grim_fusion_root_status.setWordWrap(True)
+        layout.addWidget(self.grim_fusion_root_status)
+
+        self.npm_command_status = QLabel(self)
+        self.npm_command_status.setWordWrap(True)
+        layout.addWidget(self.npm_command_status)
 
         note = QLabel(
             "Export Grades checks this folder's settings/text_en directory for "
@@ -205,7 +256,9 @@ class SettingsPage(QWidget):
         layout.addStretch()
         self._refresh_game_folder_status()
         self._refresh_character_save_root_status()
-        self._refresh_grim_save_parser_root_status()
+        self._refresh_gdstash_root_status()
+        self._refresh_grim_fusion_root_status()
+        self._refresh_npm_command_status()
 
     @staticmethod
     def _sanitize_path(value: str) -> str:
@@ -267,27 +320,71 @@ class SettingsPage(QWidget):
             self.settings.remove(CHARACTER_SAVE_ROOT_SETTING)
         self.settings.sync()
 
-    def _saved_grim_save_parser_root(self) -> str:
+    def _saved_gdstash_root(self) -> str:
         stored = ""
         if self.settings is not None:
             stored = self._sanitize_path(
-                self.settings.value(GRIM_SAVE_PARSER_ROOT_SETTING, "", type=str)
+                self.settings.value(GDSTASH_ROOT_SETTING, "", type=str)
             )
         if stored:
-            self._persist_grim_save_parser_root(stored)
+            self._persist_gdstash_root(stored)
             return stored
 
-        detected = detect_default_grim_save_parser_root()
-        self._persist_grim_save_parser_root(str(detected))
+        detected = detect_default_gdstash_root()
+        self._persist_gdstash_root(str(detected))
         return str(detected)
 
-    def _persist_grim_save_parser_root(self, value: str) -> None:
+    def _persist_gdstash_root(self, value: str) -> None:
         if self.settings is None:
             return
         if value:
-            self.settings.setValue(GRIM_SAVE_PARSER_ROOT_SETTING, value)
+            self.settings.setValue(GDSTASH_ROOT_SETTING, value)
         else:
-            self.settings.remove(GRIM_SAVE_PARSER_ROOT_SETTING)
+            self.settings.remove(GDSTASH_ROOT_SETTING)
+        self.settings.sync()
+
+    def _saved_grim_fusion_root(self) -> str:
+        stored = ""
+        if self.settings is not None:
+            stored = self._sanitize_path(
+                self.settings.value(GRIM_FUSION_ROOT_SETTING, "", type=str)
+            )
+        if stored:
+            self._persist_grim_fusion_root(stored)
+            return stored
+
+        detected = detect_default_grim_fusion_root()
+        self._persist_grim_fusion_root(str(detected))
+        return str(detected)
+
+    def _persist_grim_fusion_root(self, value: str) -> None:
+        if self.settings is None:
+            return
+        if value:
+            self.settings.setValue(GRIM_FUSION_ROOT_SETTING, value)
+        else:
+            self.settings.remove(GRIM_FUSION_ROOT_SETTING)
+        self.settings.sync()
+
+    def _saved_npm_command(self) -> str:
+        if self.settings is not None:
+            stored = self._sanitize_path(
+                self.settings.value(NPM_COMMAND_SETTING, "", type=str)
+            )
+            if stored:
+                self._persist_npm_command(stored)
+                return stored
+        command = "npm.cmd" if os.name == "nt" else "npm"
+        self._persist_npm_command(command)
+        return command
+
+    def _persist_npm_command(self, value: str) -> None:
+        if self.settings is None:
+            return
+        if value:
+            self.settings.setValue(NPM_COMMAND_SETTING, value)
+        else:
+            self.settings.remove(NPM_COMMAND_SETTING)
         self.settings.sync()
 
     def _save_game_folder(self) -> None:
@@ -351,25 +448,49 @@ class SettingsPage(QWidget):
         self.character_save_root_edit.setText(selected)
         self._save_character_save_root()
 
-    def _save_grim_save_parser_root(self) -> None:
-        value = self._sanitize_path(self.grim_save_parser_root_edit.text())
-        self.grim_save_parser_root_edit.setText(value)
-        self._persist_grim_save_parser_root(value)
-        self._refresh_grim_save_parser_root_status()
+    def _save_gdstash_root(self) -> None:
+        value = self._sanitize_path(self.gdstash_root_edit.text())
+        self.gdstash_root_edit.setText(value)
+        self._persist_gdstash_root(value)
+        self._refresh_gdstash_root_status()
 
-    def _browse_grim_save_parser_root(self) -> None:
+    def _browse_gdstash_root(self) -> None:
         starting_path = (
-            self.grim_save_parser_root_edit.text().strip() or str(Path.cwd())
+            self.gdstash_root_edit.text().strip() or str(Path.cwd())
         )
         selected = QFileDialog.getExistingDirectory(
             self,
-            "Select Grim Save Parser Repository Root",
+            "Select GDStash Installation Folder",
             starting_path,
         )
         if not selected:
             return
-        self.grim_save_parser_root_edit.setText(selected)
-        self._save_grim_save_parser_root()
+        self.gdstash_root_edit.setText(selected)
+        self._save_gdstash_root()
+
+    def _save_grim_fusion_root(self) -> None:
+        value = self._sanitize_path(self.grim_fusion_root_edit.text())
+        self.grim_fusion_root_edit.setText(value)
+        self._persist_grim_fusion_root(value)
+        self._refresh_grim_fusion_root_status()
+
+    def _browse_grim_fusion_root(self) -> None:
+        starting_path = self.grim_fusion_root_edit.text().strip() or str(Path.cwd())
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "Select grim_fusion Repository Root",
+            starting_path,
+        )
+        if not selected:
+            return
+        self.grim_fusion_root_edit.setText(selected)
+        self._save_grim_fusion_root()
+
+    def _save_npm_command(self) -> None:
+        value = self._sanitize_path(self.npm_command_edit.text())
+        self.npm_command_edit.setText(value)
+        self._persist_npm_command(value)
+        self._refresh_npm_command_status()
 
     def has_valid_game_folder(self) -> bool:
         game, _ = self._game_folder_validation()
@@ -416,31 +537,70 @@ class SettingsPage(QWidget):
             self.character_save_root_status
         )
 
-    def _refresh_grim_save_parser_root_status(self) -> None:
-        value = self.grim_save_parser_root_edit.text().strip()
+    def _refresh_gdstash_root_status(self) -> None:
+        value = self.gdstash_root_edit.text().strip()
         if not value:
-            self.grim_save_parser_root_status.setObjectName("gameFolderWarning")
-            self.grim_save_parser_root_status.setText(
-                "Grim save parser root not configured. Character import will use built-in fallback scanning only."
+            self.gdstash_root_status.setObjectName("gameFolderWarning")
+            self.gdstash_root_status.setText(
+                "GDStash root not configured. Character import still works, but compatibility checks use the bundled profile."
             )
         else:
             root = Path(value)
-            if (root / "Cargo.toml").is_file():
-                self.grim_save_parser_root_status.setObjectName("gameFolderConfirmed")
-                self.grim_save_parser_root_status.setText(
-                    f"Detected grim-save-parser project: {root}"
+            if (root / "GDStash.jar").is_file():
+                self.gdstash_root_status.setObjectName("gameFolderConfirmed")
+                self.gdstash_root_status.setText(
+                    f"Detected GDStash installation: {root}"
                 )
             else:
-                self.grim_save_parser_root_status.setObjectName("gameFolderWarning")
-                self.grim_save_parser_root_status.setText(
-                    "Not confirmed: expected Cargo.toml at parser root. Built-in fallback scanning will still be used."
+                self.gdstash_root_status.setObjectName("gameFolderWarning")
+                self.gdstash_root_status.setText(
+                    "Not confirmed: expected GDStash.jar in the selected folder. Import will continue with built-in scanning and bundled compatibility checks."
                 )
-        self.grim_save_parser_root_status.style().unpolish(
-            self.grim_save_parser_root_status
+        self.gdstash_root_status.style().unpolish(
+            self.gdstash_root_status
         )
-        self.grim_save_parser_root_status.style().polish(
-            self.grim_save_parser_root_status
+        self.gdstash_root_status.style().polish(
+            self.gdstash_root_status
         )
+
+    def _refresh_grim_fusion_root_status(self) -> None:
+        value = self.grim_fusion_root_edit.text().strip()
+        if not value:
+            self.grim_fusion_root_status.setObjectName("gameFolderWarning")
+            self.grim_fusion_root_status.setText(
+                "grim_fusion repo root not configured. Fusion workflow actions are unavailable."
+            )
+        else:
+            root = Path(value)
+            if (root / "package.json").is_file() and (
+                root / "apps" / "cli" / "package.json"
+            ).is_file():
+                self.grim_fusion_root_status.setObjectName("gameFolderConfirmed")
+                self.grim_fusion_root_status.setText(
+                    f"Detected grim_fusion repository: {root}"
+                )
+            else:
+                self.grim_fusion_root_status.setObjectName("gameFolderWarning")
+                self.grim_fusion_root_status.setText(
+                    "Not confirmed: expected package.json and apps/cli/package.json at repo root."
+                )
+        self.grim_fusion_root_status.style().unpolish(self.grim_fusion_root_status)
+        self.grim_fusion_root_status.style().polish(self.grim_fusion_root_status)
+
+    def _refresh_npm_command_status(self) -> None:
+        value = self.npm_command_edit.text().strip()
+        if not value:
+            self.npm_command_status.setObjectName("gameFolderWarning")
+            self.npm_command_status.setText(
+                "npm command is blank. Fusion workflow actions are unavailable."
+            )
+        else:
+            self.npm_command_status.setObjectName("gameFolderConfirmed")
+            self.npm_command_status.setText(
+                f"Configured npm command: {value}"
+            )
+        self.npm_command_status.style().unpolish(self.npm_command_status)
+        self.npm_command_status.style().polish(self.npm_command_status)
 
     def _game_folder_validation(self) -> tuple[Path | None, str]:
         value = self.game_folder_edit.text().strip()

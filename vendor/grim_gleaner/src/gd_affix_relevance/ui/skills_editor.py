@@ -28,6 +28,7 @@ from gd_affix_relevance.ui.widgets import StatRow
 from gd_affix_relevance.catalog import SkillCatalog, SkillDefinition
 from gd_affix_relevance.domain import BuildProfile
 from gd_affix_relevance.importers.character_save_parser import (
+    describe_gdstash_compatibility,
     extract_skill_references,
 )
 from gd_affix_relevance.ui.widgets import WeightControl
@@ -500,6 +501,10 @@ class SkillsEditor(QWidget):
         """Populate masteries and build-relevant skills from a character save."""
 
         references = extract_skill_references(save_path, parser_root=parser_root)
+        compatibility = describe_gdstash_compatibility(
+            save_path,
+            parser_root=parser_root,
+        )
         resolved_pairs = [
             (reference, self._resolve_import_skill_id(reference))
             for reference in references
@@ -527,9 +532,12 @@ class SkillsEditor(QWidget):
             packed_hint = (
                 "\n\nThis character folder only has player.gdc (no player.g00/player.g01 "
                 "companions). In this packed save format, skill references may not be "
-                "extractable without a full Grim Dawn save decoder."
+                "extractable without complete format support."
                 if len(references) == 0 and companion_count == 0
                 else ""
+            )
+            compatibility_hint = (
+                "\n\nGDStash compatibility check: " + compatibility.as_text()
             )
             raise ValueError(
                 "No selectable mastery skills were found in that character save. "
@@ -538,6 +546,7 @@ class SkillsEditor(QWidget):
                 "\n\nTip: select player.gdc (or any file in the same character "
                 "folder) so companion files like player.g00/player.g01 can be read."
                 + packed_hint
+                + compatibility_hint
                 + (
                     "\n\nSample unmatched references:\n" + sample
                     if sample

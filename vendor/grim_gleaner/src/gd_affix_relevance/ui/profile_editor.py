@@ -25,7 +25,7 @@ from gd_affix_relevance.profile_store import load_profile, save_profile
 from gd_affix_relevance.ui.catalog import PROFILE_TABS, TabDefinition
 from gd_affix_relevance.ui.settings import (
     CHARACTER_SAVE_ROOT_SETTING,
-    GRIM_SAVE_PARSER_ROOT_SETTING,
+    GDSTASH_ROOT_SETTING,
     detect_default_character_save_root,
     sanitize_path,
 )
@@ -357,7 +357,7 @@ class ProfileEditor(QWidget):
         if self.settings is not None:
             configured_parser_root = sanitize_path(
                 self.settings.value(
-                    GRIM_SAVE_PARSER_ROOT_SETTING,
+                    GDSTASH_ROOT_SETTING,
                     "",
                     type=str,
                 )

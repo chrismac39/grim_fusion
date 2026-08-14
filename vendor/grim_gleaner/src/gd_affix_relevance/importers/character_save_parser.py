@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import json
-import os
+from dataclasses import dataclass
 import re
-import shutil
-import subprocess
 import zlib
 from pathlib import Path
 
@@ -21,6 +18,32 @@ SKILL_REFERENCE_TEXT_PATTERN = re.compile(
     r"records[\\/]+skills[\\/]+[a-z0-9_./\\-]+?\.dbr",
     re.IGNORECASE,
 )
+GDSTASH_SUPPORTED_CHARACTER_VERSIONS = frozenset({6, 7, 8})
+
+
+@dataclass(frozen=True, slots=True)
+class GDStashCompatibilityReport:
+    """Minimal compatibility signal aligned to GDStash's character parser."""
+
+    character_version: int | None
+    supported_by_gdstash: bool | None
+    source: str
+
+    def as_text(self) -> str:
+        if self.character_version is None:
+            return (
+                "Could not decode character format version from save header; "
+                "GDStash compatibility could not be verified."
+            )
+        support = (
+            "is" if self.supported_by_gdstash else "is not"
+        )
+        return (
+            f"Decoded character format version {self.character_version} "
+            f"from save header and it {support} in GDStash's known "
+            f"supported versions {sorted(GDSTASH_SUPPORTED_CHARACTER_VERSIONS)} "
+            f" ({self.source})."
+        )
 
 
 def extract_skill_references(
@@ -37,10 +60,6 @@ def extract_skill_references(
     if not source.is_file():
         raise ValueError(f"character save file does not exist: {source}")
 
-    external = _extract_with_grim_save_parser(source, parser_root)
-    if external:
-        return external
-
     found: set[str] = set()
     for file_path in _candidate_character_files(source):
         raw = file_path.read_bytes()
@@ -50,6 +69,36 @@ def extract_skill_references(
                 for parsed in _extract_text_references(text):
                     found.add(_normalize_record_reference(parsed))
     return tuple(sorted(reference for reference in found if reference))
+
+
+def describe_gdstash_compatibility(
+    save_path: Path,
+    *,
+    parser_root: Path | None = None,
+) -> GDStashCompatibilityReport:
+    """Report whether *save_path* matches GDStash's known char-format support."""
+
+    source = Path(save_path).expanduser().resolve()
+    if not source.is_file():
+        raise ValueError(f"character save file does not exist: {source}")
+
+    char_version = _decode_character_version(source)
+    supported = (
+        char_version in GDSTASH_SUPPORTED_CHARACTER_VERSIONS
+        if char_version is not None
+        else None
+    )
+    gdstash_root = _resolve_gdstash_root(parser_root)
+    source_text = (
+        f"{gdstash_root / 'GDStash.jar'}"
+        if gdstash_root is not None
+        else "bundled compatibility profile"
+    )
+    return GDStashCompatibilityReport(
+        character_version=char_version,
+        supported_by_gdstash=supported,
+        source=source_text,
+    )
 
 
 def _candidate_character_files(source: Path) -> tuple[Path, ...]:
@@ -114,6 +163,18 @@ def _inflated_byte_views(raw: bytes) -> tuple[bytes, ...]:
     return tuple(outputs)
 
 
+def _resolve_gdstash_root(parser_root: Path | None) -> Path | None:
+    candidates: list[Path] = []
+    if parser_root is not None:
+        candidates.append(Path(parser_root).expanduser().resolve())
+    candidates.append(Path(r"C:\GDStash"))
+
+    for candidate in candidates:
+        if (candidate / "GDStash.jar").is_file():
+            return candidate
+    return None
+
+
 def _normalize_record_reference(value: str) -> str:
     return value.strip().replace("\\", "/").lower()
 
@@ -122,111 +183,111 @@ def _extract_text_references(value: str) -> tuple[str, ...]:
     return tuple(SKILL_REFERENCE_TEXT_PATTERN.findall(value))
 
 
-def _extract_with_grim_save_parser(
-    save_path: Path,
-    parser_root: Path | None,
-) -> tuple[str, ...]:
-    executable = _resolve_grim_save_parser_executable(parser_root)
-    if executable is None:
-        return ()
+class _GDStashCryptoReader:
+    """Minimal Grim Dawn crypto stream reader modeled after GDStash behavior."""
 
-    command = [
-        str(executable),
-        "--entity-type",
-        "character",
-        "--filepath",
-        str(save_path),
-    ]
+    XOR_BITMAP = 0x55555555
+    TABLE_MULT = 39916801
+
+    def __init__(self, data: bytes) -> None:
+        if len(data) < 8:
+            raise ValueError("save payload too small")
+        self.data = data
+        self.pos = 0
+        key_seed_raw = self._read_uint_raw()
+        key_seed = key_seed_raw ^ self.XOR_BITMAP
+        self.key = key_seed & 0xFFFFFFFF
+        self.table = self._build_table(key_seed)
+
+    @classmethod
+    def _build_table(cls, key: int) -> tuple[int, ...]:
+        values: list[int] = []
+        current = key & 0xFFFFFFFF
+        for _ in range(256):
+            current = ((current >> 1) | ((current & 1) << 31)) & 0xFFFFFFFF
+            current = (current * cls.TABLE_MULT) & 0xFFFFFFFF
+            values.append(current)
+        return tuple(values)
+
+    def _read_uint_raw(self) -> int:
+        if self.pos + 4 > len(self.data):
+            raise ValueError("unexpected end of save while reading uint")
+        value = int.from_bytes(self.data[self.pos : self.pos + 4], "little")
+        self.pos += 4
+        return value
+
+    def _update_key_raw_bytes(self, raw: bytes) -> None:
+        for byte in raw:
+            self.key ^= self.table[byte]
+            self.key &= 0xFFFFFFFF
+
+    def read_int(self, *, update_key: bool = True) -> int:
+        start = self.pos
+        raw = self._read_uint_raw()
+        decoded = (raw ^ self.key) & 0xFFFFFFFF
+        if update_key:
+            self._update_key_raw_bytes(self.data[start : start + 4])
+        return decoded
+
+    def read_byte(self) -> int:
+        if self.pos >= len(self.data):
+            raise ValueError("unexpected end of save while reading byte")
+        raw = self.data[self.pos]
+        self.pos += 1
+        decoded = (raw ^ (self.key & 0xFF)) & 0xFF
+        self._update_key_raw_bytes(bytes((raw,)))
+        return decoded
+
+    def read_string(self) -> str:
+        length = self.read_int()
+        if length <= 0:
+            return ""
+        if self.pos + length > len(self.data):
+            raise ValueError("unexpected end of save while reading string")
+        raw = self.data[self.pos : self.pos + length]
+        self.pos += length
+        out = bytearray(length)
+        for index, value in enumerate(raw):
+            out[index] = (value ^ (self.key & 0xFF)) & 0xFF
+            self._update_key_raw_bytes(bytes((value,)))
+        return out.decode("ascii", "ignore")
+
+    def read_wide_string(self) -> str:
+        length = self.read_int()
+        if length <= 0:
+            return ""
+        byte_len = length * 2
+        if self.pos + byte_len > len(self.data):
+            raise ValueError("unexpected end of save while reading wide string")
+        raw = self.data[self.pos : self.pos + byte_len]
+        self.pos += byte_len
+        out = bytearray(byte_len)
+        for index, value in enumerate(raw):
+            out[index] = (value ^ (self.key & 0xFF)) & 0xFF
+            self._update_key_raw_bytes(bytes((value,)))
+        return out.decode("utf-8", "ignore")
+
+
+def _decode_character_version(source: Path) -> int | None:
+    """Decode the top-level character format version from *player.gdc*."""
+
+    if source.name.casefold() != "player.gdc":
+        source = source.parent / "player.gdc"
+    if not source.is_file():
+        return None
+
     try:
-        result = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return ()
-    if result.returncode != 0:
-        return ()
-
-    output = result.stdout.strip()
-    if not output.startswith("{"):
-        return ()
-    try:
-        payload = json.loads(output)
-    except json.JSONDecodeError:
-        return ()
-
-    found: set[str] = set()
-    for reference in _walk_skill_names(payload):
-        for parsed in _extract_text_references(reference):
-            found.add(_normalize_record_reference(parsed))
-    return tuple(sorted(found))
-
-
-def _resolve_grim_save_parser_executable(
-    parser_root: Path | None,
-) -> Path | None:
-    env_override = os.environ.get("GRIM_SAVE_PARSER_EXE", "").strip()
-    if env_override:
-        candidate = Path(env_override).expanduser().resolve()
-        if candidate.is_file():
-            return candidate
-
-    search_roots: list[Path] = []
-    if parser_root is not None:
-        search_roots.append(Path(parser_root).expanduser().resolve())
-    env_root = os.environ.get("GRIM_SAVE_PARSER_ROOT", "").strip()
-    if env_root:
-        search_roots.append(Path(env_root).expanduser().resolve())
-    search_roots.extend(
-        [
-            Path(r"C:\repos\grim-save-parser"),
-            Path(__file__).resolve().parents[4] / "vendor" / "grim-save-parser",
-        ]
-    )
-
-    for root in search_roots:
-        candidate = root / "target" / "debug" / "console-app.exe"
-        if candidate.is_file():
-            return candidate
-        cargo = shutil.which("cargo")
-        if cargo and (root / "Cargo.toml").is_file():
-            try:
-                result = subprocess.run(
-                    [
-                        cargo,
-                        "build",
-                        "-p",
-                        "console-app",
-                    ],
-                    cwd=root,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-            except (OSError, subprocess.SubprocessError):
-                continue
-            if result.returncode == 0 and candidate.is_file():
-                return candidate
-    return None
-
-
-def _walk_skill_names(payload: object) -> tuple[str, ...]:
-    names: list[str] = []
-
-    def walk(value: object) -> None:
-        if isinstance(value, dict):
-            for key, nested in value.items():
-                if key == "name" and isinstance(nested, str):
-                    names.append(nested)
-                walk(nested)
-            return
-        if isinstance(value, list):
-            for nested in value:
-                walk(nested)
-
-    walk(payload)
-    return tuple(names)
+        reader = _GDStashCryptoReader(source.read_bytes())
+        if reader.read_int() != 0x58434447:
+            return None
+        reader.read_int()  # historical marker
+        reader.read_wide_string()  # character name
+        reader.read_byte()  # sex
+        reader.read_string()  # class/tag
+        reader.read_int()  # level
+        reader.read_byte()  # hardcore
+        reader.read_byte()  # start byte marker (typically 3)
+        reader.read_int(update_key=False)  # marker value (typically 0)
+        return reader.read_int()
+    except (OSError, ValueError):
+        return None

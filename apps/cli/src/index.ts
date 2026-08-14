@@ -39,6 +39,8 @@ type CliArgs = {
   grimDawnPath?: string;
   planName?: string;
   forceApply?: boolean;
+  noLaunch?: boolean;
+  savePlan?: boolean;
 };
 
 type PythonRuntime = {
@@ -160,6 +162,14 @@ function parseArgs(argv: string[]): CliArgs {
     const token = rest[i];
     if (token === "--force-apply") {
       out.forceApply = true;
+      continue;
+    }
+    if (token === "--no-launch") {
+      out.noLaunch = true;
+      continue;
+    }
+    if (token === "--save-plan") {
+      out.savePlan = true;
       continue;
     }
 
@@ -537,6 +547,49 @@ function runWithGleaner(args: CliArgs): void {
     const outPath = resolveUserPath(args.outPath);
     writeFileSync(outPath, `${JSON.stringify(fusionOutput, null, 2)}\n`, "utf8");
     console.log(`Wrote fusion output to ${outPath}`);
+  }
+
+  if (args.savePlan) {
+    const paletteMode: BuildPlan["paletteMode"] = args.palettePath
+      ? "custom"
+      : "default";
+    const pythonDisplay = args.python?.trim() || "py -3.13";
+    const plan: BuildPlan = {
+      name: args.planName?.trim() || fusionOutput.profile.name || "My Build Plan",
+      grimDawnPath,
+      profilePath: resolveProfilePath(args),
+      profileDir: undefined,
+      paletteMode,
+      palettePath: args.palettePath ? resolveUserPath(args.palettePath) : undefined,
+      itemsPath: resolveUserPath(args.itemsPath || path.join("fixtures", "shared", "items.json")),
+      gleanerRoot: VENDORED_GLEANER_ROOT,
+      python: pythonDisplay,
+      updatedAt: new Date().toISOString(),
+      generation: buildGenerationMetadata(
+        {
+          name: args.planName?.trim() || fusionOutput.profile.name || "My Build Plan",
+          grimDawnPath,
+          profilePath: resolveProfilePath(args),
+          profileDir: undefined,
+          paletteMode,
+          palettePath: args.palettePath ? resolveUserPath(args.palettePath) : undefined,
+          itemsPath: resolveUserPath(
+            args.itemsPath || path.join("fixtures", "shared", "items.json")
+          ),
+          gleanerRoot: VENDORED_GLEANER_ROOT,
+          python: pythonDisplay,
+          updatedAt: new Date().toISOString(),
+        },
+        deployed
+      ),
+    };
+    const planFile = savePlan(plan);
+    console.log(`Saved plan: ${planFile}`);
+  }
+
+  if (args.noLaunch) {
+    console.log("Skipped launching grim_gleaner UI (--no-launch).");
+    return;
   }
 
   launchGleanerUi({
@@ -1245,6 +1298,7 @@ function printUsage(): void {
   console.log("  npm run dev -- run --profile-dir <dir> --items <items.json> [--palette <gdse-palette.txt>] [--out <output.json>]");
   console.log("  npm run dev -- run-with-gleaner --profile <profile.json> --items <items.json> [--palette <gdse-palette.txt>] [--grim-dawn-path <path>] [--out <output.json>] [--force-apply]");
   console.log("  npm run dev -- run-with-gleaner --profile-dir <dir-with-profile-json> --items <items.json> [--palette <gdse-palette.txt>] [--grim-dawn-path <path>] [--out <output.json>] [--force-apply]");
+  console.log("  npm run dev -- run-with-gleaner --profile <profile.json> --items <items.json> --no-launch [--save-plan --plan-name <name>] [--palette <gdse-palette.txt>] [--grim-dawn-path <path>] [--force-apply]");
 }
 
 async function main(): Promise<void> {

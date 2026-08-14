@@ -27,6 +27,7 @@ from gd_affix_relevance.catalog import (
 from gd_affix_relevance.domain import BuildProfile
 from gd_affix_relevance.profile_store import load_profile
 from gd_affix_relevance.runtime_paths import RuntimePaths, resolve_runtime_paths
+from gd_affix_relevance.ui.fusion_workflow import FusionWorkflowPage
 from gd_affix_relevance.ui.generate_output import GenerateOutputPage
 from gd_affix_relevance.ui.guide import GuidePage
 from gd_affix_relevance.ui.profile_editor import ProfileEditor
@@ -194,6 +195,20 @@ class MainWindow(QMainWindow):
             self.export_grades_page_index,
         )
 
+        self.fusion_workflow_page = FusionWorkflowPage(
+            self.profile_editor.profile,
+            settings=self.settings,
+            parent=self.pages,
+        )
+        self.fusion_workflow_page_index = self.pages.addWidget(
+            self.fusion_workflow_page
+        )
+        self.fusion_workflow_navigation_row = self._add_navigation_item(
+            "Fusion Workflow",
+            "Run grim_fusion generation/apply workflows from the UI",
+            self.fusion_workflow_page_index,
+        )
+
         self.settings_page = SettingsPage(self.settings, self.pages)
         self.settings_page.game_folder_changed.connect(self._game_folder_changed)
         self.settings_page_index = self.pages.addWidget(self.settings_page)
@@ -217,6 +232,9 @@ class MainWindow(QMainWindow):
         )
         self.profile_editor.profile_path_changed.connect(
             self._remember_profile_path
+        )
+        self.profile_editor.profile_path_changed.connect(
+            self.fusion_workflow_page.refresh_profile_path
         )
         self.profile_editor.view_matches_requested.connect(
             lambda: self.navigation.setCurrentRow(
@@ -311,6 +329,7 @@ class MainWindow(QMainWindow):
 
     def _game_folder_changed(self, game_folder: str = "") -> None:
         self.generate_output_page.refresh_game_location(game_folder)
+        self.fusion_workflow_page.refresh_game_folder(game_folder)
         self._update_game_location_state()
 
     def _update_game_location_state(self) -> None:

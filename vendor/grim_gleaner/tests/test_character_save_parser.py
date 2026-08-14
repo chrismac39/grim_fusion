@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from gd_affix_relevance.importers.character_save_parser import (
+    describe_gdstash_compatibility,
     extract_skill_references,
 )
 
@@ -59,3 +60,30 @@ def test_extract_skill_references_reads_player_companion_chunks(
         "records/skills/playerclass03/curse1.dbr",
         "records/skills/playerclass10/werewolf1.dbr",
     )
+
+
+def test_gdstash_compatibility_report_handles_unknown_header(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "player.gdc"
+    source.write_bytes(b"not-a-gd-save")
+
+    report = describe_gdstash_compatibility(source)
+
+    assert report.character_version is None
+    assert report.supported_by_gdstash is None
+    assert "Could not decode" in report.as_text()
+
+
+def test_gdstash_compatibility_report_prefers_configured_root(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "GDStash"
+    root.mkdir(parents=True)
+    (root / "GDStash.jar").write_bytes(b"jar")
+    source = tmp_path / "player.gdc"
+    source.write_bytes(b"not-a-gd-save")
+
+    report = describe_gdstash_compatibility(source, parser_root=root)
+
+    assert "GDStash.jar" in report.source
