@@ -121,6 +121,24 @@ def test_parse_character_save_extracts_references_from_crypto_decoded_stream(
     assert "records/skills/playerclass04/bloodburst1.dbr" in result.references
 
 
+def test_parse_character_save_extracts_from_crypto_stream_at_offset(
+    tmp_path: Path,
+) -> None:
+    decoded = (
+        b"head\x00"
+        b"records/skills/playerclass09/pox1.dbr\x00"
+        b"tail"
+    )
+    encrypted_block = _encrypt_like_gdstash(decoded)
+    payload = b"X" * 44 + encrypted_block + b"Y" * 64
+    source = tmp_path / "player.gdc"
+    source.write_bytes(payload)
+
+    result = parse_character_save(source)
+
+    assert "records/skills/playerclass09/pox1.dbr" in result.references
+
+
 def test_parse_character_save_reports_partial_parse_and_diagnostics(
     tmp_path: Path,
 ) -> None:

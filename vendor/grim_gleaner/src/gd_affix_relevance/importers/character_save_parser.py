@@ -330,11 +330,19 @@ def _decrypted_byte_views(
     outputs: list[bytes] = []
     seen: set[bytes] = set()
 
-    # Some companion chunks can be independently encrypted streams.
-    # Try decoding from multiple plausible offsets, keeping only views
-    # that contain path-like separators or record roots.
-    candidate_offsets = (0, 4, 8)
+    # Some save blocks are encrypted independently and begin at nontrivial
+    # offsets inside player.gdc. Probe a bounded set of plausible offsets.
+    candidate_offsets: list[int] = [0, 4, 8]
+    scan_limit = min(len(raw) - 8, 64 * 1024)
+    step = 4
+    for offset in range(12, scan_limit, step):
+        candidate_offsets.append(offset)
+
+    max_candidates = 96
+    selected = 0
     for offset in candidate_offsets:
+        if selected >= max_candidates:
+            break
         if len(raw) - offset < 12:
             continue
         segment = raw[offset:]
@@ -345,12 +353,18 @@ def _decrypted_byte_views(
             continue
         if len(decoded) < 24:
             continue
-        if b"/" not in decoded and b"\\" not in decoded and b"records" not in decoded.lower():
+        # Keep views with explicit skill path signals or mastery identifiers.
+        if (
+            b"records/skills/" not in decoded.lower()
+            and b"records\\skills\\" not in decoded.lower()
+            and b"playerclass" not in decoded.lower()
+        ):
             continue
         if decoded in seen:
             continue
         seen.add(decoded)
         outputs.append(decoded)
+        selected += 1
 
     if not outputs and source_file.name.casefold().startswith("player.g"):
         _append_diagnostic_once(
@@ -382,22 +396,31 @@ def _inflated_byte_views(
 
     failures = 0
     for index, byte in enumerate(raw):
-        if byte != 0x78:
+        # Common zlib/deflate stream starts. We still rely on successful
+        # decompression to accept a candidate.
+        if byte not in {0x78, 0x58, 0x68, 0x08}:
             continue
         if len(outputs) >= max_candidates:
             break
-        try:
-            stream = zlib.decompressobj()
-            inflated = stream.decompress(raw[index:], max_output_size)
-        except zlib.error:
+        inflated_candidate: bytes | None = None
+        for wbits in (zlib.MAX_WBITS, -zlib.MAX_WBITS, zlib.MAX_WBITS | 32):
+            try:
+                stream = zlib.decompressobj(wbits)
+                inflated = stream.decompress(raw[index:], max_output_size)
+            except zlib.error:
+                continue
+            if len(inflated) < 24:
+                continue
+            inflated_candidate = inflated
+            break
+
+        if inflated_candidate is None:
             failures += 1
             continue
-        if len(inflated) < 24:
+        if inflated_candidate in seen:
             continue
-        if inflated in seen:
-            continue
-        seen.add(inflated)
-        outputs.append(inflated)
+        seen.add(inflated_candidate)
+        outputs.append(inflated_candidate)
 
     if failures and not outputs:
         _append_diagnostic_once(
