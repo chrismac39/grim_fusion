@@ -41,7 +41,7 @@ from gd_affix_relevance.ui.skills_editor import SkillsEditor
 
 
 class _CharacterSaveParseWorker(QObject):
-    finished = Signal(object, object)
+    finished = Signal(object, object, object)
     failed = Signal(str)
 
     def __init__(self, save_path: Path, parser_root: Path | None) -> None:
@@ -63,7 +63,7 @@ class _CharacterSaveParseWorker(QObject):
         except (OSError, ValueError, TypeError) as error:
             self.failed.emit(str(error))
             return
-        self.finished.emit(parse_result, compatibility)
+        self.finished.emit(self.save_path, parse_result, compatibility)
 
 
 class ProfileEditor(QWidget):
@@ -436,19 +436,13 @@ class ProfileEditor(QWidget):
         self._parse_worker = _CharacterSaveParseWorker(Path(selected), parser_root)
         self._parse_worker.moveToThread(self._parse_thread)
         self._parse_thread.started.connect(self._parse_worker.run)
-        self._parse_worker.finished.connect(
-            lambda parse_result, compatibility: self._on_parse_success(
-                Path(selected),
-                parse_result,
-                compatibility,
-            )
-        )
+        self._parse_worker.finished.connect(self._on_parse_success)
         self._parse_worker.failed.connect(self._on_parse_failure)
         self._parse_worker.finished.connect(self._cleanup_parse_worker)
         self._parse_worker.failed.connect(self._cleanup_parse_worker)
         self._parse_thread.start()
 
-    @Slot(object, object)
+    @Slot(object, object, object)
     def _on_parse_success(
         self,
         save_path: Path,
