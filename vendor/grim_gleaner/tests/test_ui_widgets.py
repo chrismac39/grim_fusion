@@ -139,16 +139,15 @@ def test_main_window_exposes_gear_grade_subnavigation_and_settings() -> None:
     _application()
     window = MainWindow(catalog=AffixCatalog(()))
 
-    assert window.navigation.count() == 9
+    assert window.navigation.count() == 8
     assert window.navigation.item(0).text() == "Build Profile"
     assert window.navigation.item(1).text() == "Gear Grades"
     assert window.navigation.item(2).text().strip() == "Affixes"
     assert window.navigation.item(3).text().strip() == "Uniques"
     assert window.navigation.item(4).text().strip() == "Add-ons"
     assert window.navigation.item(5).text() == "Export Grades"
-    assert window.navigation.item(6).text() == "Fusion Workflow"
-    assert window.navigation.item(7).text() == "Settings"
-    assert window.navigation.item(8).text() == "Guide"
+    assert window.navigation.item(6).text() == "Settings"
+    assert window.navigation.item(7).text() == "Guide"
     assert (
         window.navigation.item(2).font().pointSizeF()
         < window.navigation.item(1).font().pointSizeF()
@@ -181,32 +180,10 @@ def test_main_window_exposes_gear_grade_subnavigation_and_settings() -> None:
     window.navigation.setCurrentRow(5)
     assert window.pages.currentWidget() is window.generate_output_page
     window.navigation.setCurrentRow(6)
-    assert window.pages.currentWidget() is window.fusion_workflow_page
-    window.navigation.setCurrentRow(7)
     assert window.pages.currentWidget() is window.settings_page
-    window.navigation.setCurrentRow(8)
+    window.navigation.setCurrentRow(7)
     assert window.pages.currentWidget() is window.guide_page
     assert window.guide_page.findChild(QLabel, "pageTitle").text() == "Guide"
-
-
-def test_fusion_workflow_quick_links_navigate_to_related_pages() -> None:
-    _application()
-    window = MainWindow(catalog=AffixCatalog(()))
-
-    window.navigation.setCurrentRow(window.fusion_workflow_navigation_row)
-    page = window.fusion_workflow_page
-    assert window.pages.currentWidget() is page
-
-    page.open_profile_button.click()
-    assert window.navigation.currentRow() == window.profile_navigation_row
-
-    window.navigation.setCurrentRow(window.fusion_workflow_navigation_row)
-    page.open_export_button.click()
-    assert window.navigation.currentRow() == window.export_grades_navigation_row
-
-    window.navigation.setCurrentRow(window.fusion_workflow_navigation_row)
-    page.open_settings_button.click()
-    assert window.navigation.currentRow() == window.settings_navigation_row
 
 
 def test_settings_page_persists_grim_dawn_folder(tmp_path: Path) -> None:
