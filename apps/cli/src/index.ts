@@ -1132,115 +1132,34 @@ async function askExistingJsonFile(
 }
 
 async function runGuidedSession(args: CliArgs): Promise<void> {
-  const rl = createInterface({ input, output });
-  try {
-    console.log("grim_fusion guided session");
+  const configuredGrimDawnPath = resolveUserPath(
+    args.grimDawnPath || DEFAULT_GD_PATH
+  );
+  const runtime = detectPythonRuntime(args.python);
 
-    const configuredGrimDawnPath = resolveUserPath(
-      args.grimDawnPath || DEFAULT_GD_PATH
+  console.log("grim_fusion UI-first session");
+  console.log("Checking tools and dependencies...");
+  ensureToolsAndDependencies(VENDORED_GLEANER_ROOT, runtime);
+  console.log("Tools look good.");
+
+  if (!existsSync(configuredGrimDawnPath)) {
+    console.warn(
+      [
+        `Grim Dawn path is not currently available: ${configuredGrimDawnPath}`,
+        "You can set or correct it in the grim_gleaner Settings page.",
+      ].join("\n")
     );
-    let grimDawnPath = configuredGrimDawnPath;
-    if (existsSync(configuredGrimDawnPath)) {
-      console.log(`1) Grim Dawn install path: ${configuredGrimDawnPath}`);
-    } else {
-      const grimDawnPathAnswer = await ask(
-        rl,
-        `1) Grim Dawn install path not found at ${configuredGrimDawnPath}. Enter path: `
-      );
-      grimDawnPath = resolveUserPath(grimDawnPathAnswer);
-    }
-
-    const gleanerRoot = VENDORED_GLEANER_ROOT;
-    const runtime = detectPythonRuntime(args.python);
-
-    console.log("Checking tools and dependencies...");
-    ensureToolsAndDependencies(gleanerRoot, runtime);
-    console.log("Tools look good.");
-
-    console.log("2) Profile source for pre-Gleaner gdse-style colorization");
-    console.log("   Press Enter at path prompts to use defaults.");
-    const profileModePath = await ask(
-      rl,
-      "Profile JSON path (leave blank to auto-pick newest in a directory): "
-    );
-    const profileDirDefault = path.join(gleanerRoot, "artifacts", "profiles", "examples");
-    const profileDir =
-      profileModePath.length === 0
-        ? await askExistingDirectory(
-            rl,
-            `Profile directory [${profileDirDefault}]: `,
-            profileDirDefault
-          )
-        : undefined;
-    const profilePath =
-      profileModePath.length > 0 ? resolveUserPath(profileModePath) : undefined;
-
-    console.log("3) Palette selection (gdse style)");
-    const useDefaultPalette = await askYesNo(rl, "Use default gdse palette?", true);
-    const palettePath = useDefaultPalette
-      ? undefined
-      : resolveUserPath(await ask(rl, "Custom palette file path: "));
-
-    const itemsDefault = args.itemsPath ?? path.join("fixtures", "shared", "items.json");
-    const itemsPath = await askExistingJsonFile(
-      rl,
-      `Items JSON path [${itemsDefault}]: `,
-      itemsDefault
-    );
-
-    console.log(
-      "4) Running gdse-style fusion generation/apply before launching grim_gleaner UI."
-    );
-    runWithGleaner({
-      ...args,
-      command: "run-with-gleaner",
-      grimDawnPath,
-      python: args.python,
-      profilePath,
-      profileDir,
-      palettePath,
-      itemsPath,
-      forceApply: args.forceApply,
-    });
-
-    const suggestedPlanName =
-      (args.planName ??
-        (await ask(rl, "5) Name this build plan (example: Cold Wereraven): "))) ||
-      "My Build Plan";
-
-    const plan: BuildPlan = {
-      name: suggestedPlanName,
-      grimDawnPath,
-      profilePath: resolveProfilePath({
-        command: "run",
-        profilePath,
-        profileDir,
-      }),
-      profileDir: undefined,
-      paletteMode: useDefaultPalette ? "default" : "custom",
-      palettePath,
-      itemsPath,
-      gleanerRoot,
-      python: runtime.display,
-      updatedAt: new Date().toISOString(),
-    };
-    const planFile = savePlan(plan);
-    console.log(`Saved plan: ${planFile}`);
-
-    const plans = loadPlans();
-    console.log("6) Select the plan to play for this session:");
-    const selected = await choosePlanInteractively(rl, plans);
-    const deploy = applyPlan(selected, args.forceApply ?? true);
-
-    console.log(
-      deploy.deployed
-        ? `Applied fusion text to ${deploy.targetFile}`
-        : `Plan unchanged. Existing text kept at ${deploy.targetFile}`
-    );
-    console.log("Launch Grim Dawn and play using this profile plan.");
-  } finally {
-    rl.close();
   }
+
+  if (args.noLaunch) {
+    console.log("Skipped launching grim_gleaner UI (--no-launch).");
+    return;
+  }
+
+  launchGleanerUi({
+    ...args,
+    grimDawnPath: configuredGrimDawnPath,
+  });
 }
 
 function runExample(): void {
@@ -1292,7 +1211,7 @@ function runExample(): void {
 function printUsage(): void {
   console.log("grim-fusion usage:");
   console.log("  npm run dev -- --example");
-  console.log("  npm run dev -- session [--grim-dawn-path <path>] [--items <items.json>] [--plan-name <name>] [--force-apply]");
+  console.log("  npm run dev -- session [--grim-dawn-path <path>] [--python <path-or-command>] [--no-launch]");
   console.log("  npm run dev -- apply-plan [--plan-name <name>] [--force-apply]");
   console.log("  npm run dev -- run --profile <profile.json> --items <items.json> [--palette <gdse-palette.txt>] [--out <output.json>]");
   console.log("  npm run dev -- run --profile-dir <dir> --items <items.json> [--palette <gdse-palette.txt>] [--out <output.json>]");
