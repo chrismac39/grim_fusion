@@ -45,3 +45,9 @@ Entertainment. Grim Gleaner is an independent community utility and is not
 affiliated with or endorsed by Crate Entertainment.
 
 https://www.grimdawn.com/
+
+GDStash collaboration note
+--------------------------
+On 2026-08-13, the GDStash author provided written permission to reuse and
+adapt GDStash save-parser logic for grim_fusion / vendored grim_gleaner
+character-import compatibility work.
