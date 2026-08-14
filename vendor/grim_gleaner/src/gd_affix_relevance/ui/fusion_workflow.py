@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+import re
 import tempfile
 from pathlib import Path
+from typing import Callable
 
-from PySide6.QtCore import QProcess, QSettings
+from PySide6.QtCore import QProcess, QSettings, QTimer
 from PySide6.QtWidgets import (
     QFileDialog,
     QCheckBox,
@@ -15,6 +18,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -37,6 +41,12 @@ USE_DEFAULT_PALETTE_SETTING = "fusion/use_default_palette"
 LAST_ACTIVE_PROFILE_PATH_SETTING = "profiles/active_path"
 
 
+@dataclass(frozen=True, slots=True)
+class WorkflowStep:
+    label: str
+    pattern: re.Pattern[str] | None = None
+
+
 class FusionWorkflowPage(QWidget):
     """Run grim_fusion npm workflows without leaving the Gleaner UI."""
 
@@ -45,13 +55,22 @@ class FusionWorkflowPage(QWidget):
         profile: BuildProfile,
         *,
         settings: QSettings | None = None,
+        open_profile_page: Callable[[], None] | None = None,
+        open_export_page: Callable[[], None] | None = None,
+        open_settings_page: Callable[[], None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.profile = profile
         self.settings = settings
+        self.open_profile_page = open_profile_page
+        self.open_export_page = open_export_page
+        self.open_settings_page = open_settings_page
         self._process: QProcess | None = None
         self._temp_profile_path: Path | None = None
+        self._active_steps: tuple[WorkflowStep, ...] = ()
+        self._completed_step_count = 0
+        self._stop_requested = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(32, 28, 32, 28)
@@ -130,6 +149,21 @@ class FusionWorkflowPage(QWidget):
         self.plan_name_edit.editingFinished.connect(self._save_plan_name)
         form.addRow("Plan name", self.plan_name_edit)
 
+        self.output_path_edit = QLineEdit(self._saved_output_path(), self)
+        self.output_path_edit.setObjectName("outputPath")
+        self.output_path_edit.setPlaceholderText("Optional: path for generated JSON output")
+        self.output_path_edit.editingFinished.connect(self._save_output_path)
+        output_row = QWidget(self)
+        output_layout = QHBoxLayout(output_row)
+        output_layout.setContentsMargins(0, 0, 0, 0)
+        output_layout.setSpacing(8)
+        output_layout.addWidget(self.output_path_edit, 1)
+        self.browse_output_button = QPushButton("Browse...", output_row)
+        self.browse_output_button.setObjectName("profileAction")
+        self.browse_output_button.clicked.connect(self._browse_output_path)
+        output_layout.addWidget(self.browse_output_button)
+        form.addRow("Output JSON", output_row)
+
         self.force_apply = QCheckBox(
             "Force apply even when generated hash matches last run",
             self,
@@ -141,8 +175,13 @@ class FusionWorkflowPage(QWidget):
         layout.addLayout(form)
 
         actions = QHBoxLayout()
+        self.generate_button = QPushButton("Generate Output", self)
+        self.generate_button.setObjectName("primaryAction")
+        self.generate_button.clicked.connect(self._run_generate_output)
+        actions.addWidget(self.generate_button)
+
         self.apply_active_button = QPushButton("Apply Active Profile", self)
-        self.apply_active_button.setObjectName("primaryAction")
+        self.apply_active_button.setObjectName("profileAction")
         self.apply_active_button.clicked.connect(self._run_apply_active_profile)
         actions.addWidget(self.apply_active_button)
 
@@ -159,15 +198,41 @@ class FusionWorkflowPage(QWidget):
         actions.addStretch()
         layout.addLayout(actions)
 
+        page_actions = QHBoxLayout()
+        self.open_profile_button = QPushButton("Profile", self)
+        self.open_profile_button.setObjectName("profileAction")
+        self.open_profile_button.clicked.connect(self._open_profile_page)
+        page_actions.addWidget(self.open_profile_button)
+        self.open_export_button = QPushButton("Export", self)
+        self.open_export_button.setObjectName("profileAction")
+        self.open_export_button.clicked.connect(self._open_export_page)
+        page_actions.addWidget(self.open_export_button)
+        self.open_settings_button = QPushButton("Settings", self)
+        self.open_settings_button.setObjectName("profileAction")
+        self.open_settings_button.clicked.connect(self._open_settings_page)
+        page_actions.addWidget(self.open_settings_button)
+        page_actions.addStretch()
+        layout.addLayout(page_actions)
+
         self.status = QLabel(self)
         self.status.setObjectName("pageHint")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
 
-        self.command_preview = QLabel(self)
-        self.command_preview.setObjectName("pageHint")
-        self.command_preview.setWordWrap(True)
-        layout.addWidget(self.command_preview)
+        self.step_status = QLabel(self)
+        self.step_status.setObjectName("pageHint")
+        self.step_status.setWordWrap(True)
+        layout.addWidget(self.step_status)
+
+        self.progress = QProgressBar(self)
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        layout.addWidget(self.progress)
+
+        self.backend_task = QLabel("Backend orchestration: idle", self)
+        self.backend_task.setObjectName("pageHint")
+        self.backend_task.setWordWrap(True)
+        layout.addWidget(self.backend_task)
 
         self.log_output = QPlainTextEdit(self)
         self.log_output.setObjectName("outputPreview")
@@ -177,6 +242,112 @@ class FusionWorkflowPage(QWidget):
 
         self._palette_mode_changed(self.use_default_palette.isChecked())
         self._refresh_status()
+
+    def _default_output_path(self) -> str:
+        root = self._grim_fusion_root_value()
+        if not root:
+            return ""
+        return str(Path(root) / "artifacts" / "fusion-output.ui.json")
+
+    def _workflow_steps_for(self, mode: str) -> tuple[WorkflowStep, ...]:
+        if mode == "generate":
+            return (
+                WorkflowStep("Validating inputs"),
+                WorkflowStep("Preparing active profile snapshot"),
+                WorkflowStep("Scoring and composing output", re.compile(r"Scored .* items", re.IGNORECASE)),
+                WorkflowStep("Writing output JSON", re.compile(r"Wrote fusion output", re.IGNORECASE)),
+                WorkflowStep("Done"),
+            )
+        if mode == "apply-active":
+            return (
+                WorkflowStep("Validating inputs"),
+                WorkflowStep("Preparing active profile snapshot"),
+                WorkflowStep("Generating fusion output", re.compile(r"Wrote fusion output", re.IGNORECASE)),
+                WorkflowStep("Applying generated text", re.compile(r"Applied generated text|No localization changes", re.IGNORECASE)),
+                WorkflowStep("Saving plan metadata"),
+                WorkflowStep("Done"),
+            )
+        return (
+            WorkflowStep("Validating saved plan"),
+            WorkflowStep("Loading plan"),
+            WorkflowStep("Applying generated text", re.compile(r"Applied generated text|No localization changes", re.IGNORECASE)),
+            WorkflowStep("Done"),
+        )
+
+    def _set_active_steps(self, steps: tuple[WorkflowStep, ...]) -> None:
+        self._active_steps = steps
+        self._completed_step_count = 0
+        total = max(1, len(steps))
+        self.progress.setRange(0, total)
+        self.progress.setValue(0)
+        self._refresh_step_status()
+
+    def _advance_step(self) -> None:
+        if self._completed_step_count >= len(self._active_steps):
+            return
+        self._completed_step_count += 1
+        self.progress.setValue(self._completed_step_count)
+        self._refresh_step_status()
+
+    def _refresh_step_status(self) -> None:
+        if not self._active_steps:
+            self.step_status.setText("Workflow steps: none")
+            return
+        completed = self._completed_step_count
+        total = len(self._active_steps)
+        current = (
+            self._active_steps[min(completed, total - 1)].label
+            if completed < total
+            else self._active_steps[-1].label
+        )
+        self.step_status.setText(
+            f"Step progress: {completed}/{total}. Current: {current}."
+        )
+
+    def _scan_step_progress(self, text: str) -> None:
+        if not self._active_steps:
+            return
+        for index in range(self._completed_step_count, len(self._active_steps)):
+            pattern = self._active_steps[index].pattern
+            if pattern is None:
+                continue
+            if pattern.search(text):
+                self._completed_step_count = index + 1
+                self.progress.setValue(self._completed_step_count)
+        self._refresh_step_status()
+
+    def _run_generate_output(self) -> None:
+        invalid_reason = self._validate_common_inputs(require_palette=not self.use_default_palette.isChecked())
+        if invalid_reason:
+            QMessageBox.warning(self, "Cannot Run Fusion Workflow", invalid_reason)
+            return
+
+        output_path = self.output_path_edit.text().strip() or self._default_output_path()
+        self.output_path_edit.setText(output_path)
+        args = [
+            "run",
+            "dev",
+            "--",
+            "run",
+            "--profile",
+            str(self._write_temp_profile()),
+            "--items",
+            self.items_path_edit.text().strip(),
+            "--grim-dawn-path",
+            self.grim_dawn_path_edit.text().strip(),
+            "--out",
+            output_path,
+        ]
+        palette_path = self.palette_path_edit.text().strip()
+        if not self.use_default_palette.isChecked() and palette_path:
+            args.extend(["--palette", palette_path])
+
+        self._start_process(
+            args,
+            "Generating fusion output JSON...",
+            mode="generate",
+            task="grim_fusion run",
+        )
 
     def refresh_game_folder(self, game_folder: str = "") -> None:
         configured = sanitize_path(game_folder)
@@ -239,7 +410,12 @@ class FusionWorkflowPage(QWidget):
         if self.force_apply.isChecked():
             args.append("--force-apply")
 
-        self._start_process(args, f"Applying active profile using plan '{plan_name}'...")
+        self._start_process(
+            args,
+            f"Applying active profile using plan '{plan_name}'...",
+            mode="apply-active",
+            task="grim_fusion run-with-gleaner",
+        )
 
     def _run_apply_saved_plan(self) -> None:
         root = self._grim_fusion_root_value()
@@ -272,9 +448,21 @@ class FusionWorkflowPage(QWidget):
         if self.force_apply.isChecked():
             args.append("--force-apply")
 
-        self._start_process(args, f"Applying saved plan '{plan_name}'...")
+        self._start_process(
+            args,
+            f"Applying saved plan '{plan_name}'...",
+            mode="apply-plan",
+            task="grim_fusion apply-plan",
+        )
 
-    def _start_process(self, npm_args: list[str], status: str) -> None:
+    def _start_process(
+        self,
+        npm_args: list[str],
+        status: str,
+        *,
+        mode: str,
+        task: str,
+    ) -> None:
         if self._process is not None:
             QMessageBox.information(
                 self,
@@ -296,8 +484,12 @@ class FusionWorkflowPage(QWidget):
         self._save_items_path()
         self._save_palette_path()
         self._save_plan_name()
+        self._save_output_path()
         self._save_force_apply()
+        self._stop_requested = False
         self.log_output.clear()
+        self._set_active_steps(self._workflow_steps_for(mode))
+        self._advance_step()
 
         process = QProcess(self)
         process.setProgram(npm_command)
@@ -311,10 +503,9 @@ class FusionWorkflowPage(QWidget):
         self._process = process
         self._set_running(True)
         self.status.setText(status)
-        self.command_preview.setText(
-            f"Command: {npm_command} {' '.join(npm_args)}"
-        )
+        self.backend_task.setText(f"Backend orchestration: {task}")
         process.start()
+        self._advance_step()
 
     def _read_process_output(self) -> None:
         if self._process is None:
@@ -324,6 +515,7 @@ class FusionWorkflowPage(QWidget):
         )
         if text:
             self.log_output.appendPlainText(text.rstrip("\n"))
+            self._scan_step_progress(text)
 
     def _process_finished(
         self,
@@ -333,11 +525,18 @@ class FusionWorkflowPage(QWidget):
         if self._process is not None:
             self._read_process_output()
 
+        self._scan_step_progress(self.log_output.toPlainText())
+
         success = (
             exit_status == QProcess.ExitStatus.NormalExit and exit_code == 0
         )
         if success:
+            self._completed_step_count = len(self._active_steps)
+            self.progress.setValue(self._completed_step_count)
+            self._refresh_step_status()
             self.status.setText("Fusion workflow completed successfully.")
+        elif self._stop_requested:
+            self.status.setText("Fusion workflow canceled.")
         else:
             self.status.setText(
                 f"Fusion workflow failed (exit code {exit_code})."
@@ -351,6 +550,7 @@ class FusionWorkflowPage(QWidget):
         self.status.setText(
             "Failed to start fusion workflow process. Check npm command and repo root settings."
         )
+        self.step_status.setText("Workflow did not start. Check Settings paths.")
         self._cleanup_temp_profile()
         self._set_running(False)
         self._process = None
@@ -358,12 +558,25 @@ class FusionWorkflowPage(QWidget):
     def _stop_process(self) -> None:
         if self._process is None:
             return
-        self._process.kill()
+        self._stop_requested = True
+        self.status.setText("Cancel requested. Waiting for backend process to stop...")
+        self._process.terminate()
+        QTimer.singleShot(3000, self._kill_process_if_running)
+
+    def _kill_process_if_running(self) -> None:
+        if self._process is None:
+            return
+        if self._process.state() != QProcess.ProcessState.NotRunning:
+            self._process.kill()
 
     def _set_running(self, running: bool) -> None:
         self.apply_active_button.setEnabled(not running)
+        self.generate_button.setEnabled(not running)
         self.apply_plan_button.setEnabled(not running)
         self.stop_button.setEnabled(running)
+        self.open_profile_button.setEnabled(not running)
+        self.open_export_button.setEnabled(not running)
+        self.open_settings_button.setEnabled(not running)
 
     def _write_temp_profile(self) -> Path:
         with tempfile.NamedTemporaryFile(
@@ -506,6 +719,25 @@ class FusionWorkflowPage(QWidget):
             self.settings.remove(PLAN_NAME_SETTING)
         self.settings.sync()
 
+    def _saved_output_path(self) -> str:
+        if self.settings is None:
+            return self._default_output_path()
+        stored = sanitize_path(
+            self.settings.value("fusion/output_path", "", type=str)
+        )
+        return stored or self._default_output_path()
+
+    def _save_output_path(self) -> None:
+        if self.settings is None:
+            return
+        value = sanitize_path(self.output_path_edit.text())
+        self.output_path_edit.setText(value)
+        if value:
+            self.settings.setValue("fusion/output_path", value)
+        else:
+            self.settings.remove("fusion/output_path")
+        self.settings.sync()
+
     def _saved_force_apply(self) -> bool:
         if self.settings is None:
             return False
@@ -566,3 +798,28 @@ class FusionWorkflowPage(QWidget):
             return
         self.palette_path_edit.setText(selected)
         self._save_palette_path()
+
+    def _browse_output_path(self) -> None:
+        starting_path = self.output_path_edit.text().strip() or str(Path.cwd())
+        selected, _ = QFileDialog.getSaveFileName(
+            self,
+            "Select Fusion Output JSON",
+            starting_path,
+            "JSON Files (*.json);;All Files (*)",
+        )
+        if not selected:
+            return
+        self.output_path_edit.setText(selected)
+        self._save_output_path()
+
+    def _open_profile_page(self) -> None:
+        if self.open_profile_page is not None:
+            self.open_profile_page()
+
+    def _open_export_page(self) -> None:
+        if self.open_export_page is not None:
+            self.open_export_page()
+
+    def _open_settings_page(self) -> None:
+        if self.open_settings_page is not None:
+            self.open_settings_page()

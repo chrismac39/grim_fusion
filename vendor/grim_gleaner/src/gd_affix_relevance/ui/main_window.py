@@ -198,6 +198,15 @@ class MainWindow(QMainWindow):
         self.fusion_workflow_page = FusionWorkflowPage(
             self.profile_editor.profile,
             settings=self.settings,
+            open_profile_page=lambda: self.navigation.setCurrentRow(
+                self.profile_navigation_row
+            ),
+            open_export_page=lambda: self.navigation.setCurrentRow(
+                self.export_grades_navigation_row
+            ),
+            open_settings_page=lambda: self.navigation.setCurrentRow(
+                self.settings_navigation_row
+            ),
             parent=self.pages,
         )
         self.fusion_workflow_page_index = self.pages.addWidget(
