@@ -47,6 +47,7 @@ class CharacterSaveImportSummary:
     skill_references_found: int
     matched_skill_count: int
     inferred_masteries: tuple[str, ...]
+    import_mode: str
     partial_parse: bool
     confidence: float
     compatibility: str
@@ -546,10 +547,40 @@ class SkillsEditor(QWidget):
                 inferred_masteries=tuple(
                     mastery_id for mastery_id in selected_masteries if mastery_id
                 ),
+                import_mode="masteries_only",
                 partial_parse=metadata.partial_parse,
                 confidence=metadata.confidence,
                 compatibility=compatibility.as_text(),
                 diagnostics=tuple(diag.message for diag in metadata.diagnostics),
+            )
+
+        if (
+            not matched
+            and len(references) == 0
+            and not metadata.inferred_masteries
+            and compatibility.character_version is not None
+        ):
+            self.profile.clear_skills()
+            self.profile.set_mastery(0, "")
+            self.profile.set_mastery(1, "")
+            self.refresh_from_profile()
+            self.changed.emit()
+
+            diagnostics = [diag.message for diag in metadata.diagnostics]
+            diagnostics.append(
+                "No mastery or selectable skill references were found. "
+                "This can be normal for a new or unallocated character."
+            )
+            return CharacterSaveImportSummary(
+                save_path=Path(save_path).expanduser().resolve(),
+                skill_references_found=0,
+                matched_skill_count=0,
+                inferred_masteries=(),
+                import_mode="empty_character",
+                partial_parse=metadata.partial_parse,
+                confidence=metadata.confidence,
+                compatibility=compatibility.as_text(),
+                diagnostics=tuple(diagnostics),
             )
 
         if not matched:
@@ -636,6 +667,7 @@ class SkillsEditor(QWidget):
             inferred_masteries=tuple(
                 mastery_id for mastery_id in selected_masteries if mastery_id
             ),
+            import_mode="skills_and_masteries",
             partial_parse=metadata.partial_parse,
             confidence=metadata.confidence,
             compatibility=compatibility.as_text(),

@@ -401,10 +401,19 @@ class ProfileEditor(QWidget):
             if summary.partial_parse
             else "complete"
         )
+        mode_message = "Imported skills and masteries from character save."
+        if summary.import_mode == "masteries_only":
+            mode_message = (
+                "Imported mastery selections, but no selectable skills were found in the save payload."
+            )
+        elif summary.import_mode == "empty_character":
+            mode_message = (
+                "Character save appears valid but has no allocated mastery/skill data yet."
+            )
         QMessageBox.information(
             self,
             "Character Save Imported",
-            "Imported skills from character save and updated the active profile.\n\n"
+            f"{mode_message}\n\n"
             f"Skill references found: {summary.skill_references_found}\n"
             f"Selectable skills imported: {summary.matched_skill_count}\n"
             f"Detected masteries: {detected_masteries}\n"

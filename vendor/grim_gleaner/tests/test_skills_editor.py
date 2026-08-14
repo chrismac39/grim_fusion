@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -297,3 +298,76 @@ def test_import_from_single_file_save_can_apply_inferred_masteries(
     assert summary.matched_skill_count == 0
     assert summary.inferred_masteries == ("playerclass01", "playerclass03")
     assert profile.masteries == ("playerclass01", "playerclass03")
+
+
+def test_import_from_valid_empty_character_does_not_fail(
+    monkeypatch,
+) -> None:
+    _application()
+    profile = BuildProfile(masteries=("playerclass01", "playerclass02"))
+    editor = SkillsEditor(profile, _catalog())
+
+    parse_result = SimpleNamespace(
+        references=(),
+        metadata=SimpleNamespace(
+            inferred_masteries=(),
+            partial_parse=True,
+            confidence=0.55,
+            diagnostics=(),
+        ),
+    )
+    compatibility = SimpleNamespace(
+        character_version=8,
+        as_text=lambda: "version 8 supported",
+    )
+
+    import gd_affix_relevance.ui.skills_editor as skills_editor_module
+
+    monkeypatch.setattr(skills_editor_module, "parse_character_save", lambda *_args, **_kwargs: parse_result)
+    monkeypatch.setattr(
+        skills_editor_module,
+        "describe_gdstash_compatibility",
+        lambda *_args, **_kwargs: compatibility,
+    )
+
+    summary = editor.import_from_character_save(Path("player.gdc"))
+
+    assert summary.import_mode == "empty_character"
+    assert summary.matched_skill_count == 0
+    assert profile.masteries == ("", "")
+
+
+def test_import_still_errors_for_invalid_non_save_payload(
+    monkeypatch,
+) -> None:
+    _application()
+    editor = SkillsEditor(BuildProfile(), _catalog())
+
+    parse_result = SimpleNamespace(
+        references=(),
+        metadata=SimpleNamespace(
+            inferred_masteries=(),
+            partial_parse=True,
+            confidence=0.0,
+            diagnostics=(),
+        ),
+    )
+    compatibility = SimpleNamespace(
+        character_version=None,
+        as_text=lambda: "unknown version",
+    )
+
+    import gd_affix_relevance.ui.skills_editor as skills_editor_module
+
+    monkeypatch.setattr(skills_editor_module, "parse_character_save", lambda *_args, **_kwargs: parse_result)
+    monkeypatch.setattr(
+        skills_editor_module,
+        "describe_gdstash_compatibility",
+        lambda *_args, **_kwargs: compatibility,
+    )
+
+    try:
+        editor.import_from_character_save(Path("not-a-save.bin"))
+        raise AssertionError("expected import to fail for invalid payload")
+    except ValueError as error:
+        assert "No selectable mastery skills were found" in str(error)
