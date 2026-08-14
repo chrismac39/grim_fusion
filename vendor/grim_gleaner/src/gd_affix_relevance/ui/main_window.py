@@ -139,6 +139,7 @@ class MainWindow(QMainWindow):
             profile_path=profile_path,
             profiles_root=self.runtime_paths.profiles_root,
             startup_notice=startup_notice,
+            settings=self.settings,
         )
         self.profile_page_index = self.pages.addWidget(self.profile_editor)
         self.profile_navigation_row = self._add_navigation_item(

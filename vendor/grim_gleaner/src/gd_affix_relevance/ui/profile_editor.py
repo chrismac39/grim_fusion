@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSignalBlocker, Signal
+from PySide6.QtCore import QSettings, QSignalBlocker, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -23,6 +23,11 @@ from gd_affix_relevance.catalog import SkillCatalog
 from gd_affix_relevance.domain import BuildProfile
 from gd_affix_relevance.profile_store import load_profile, save_profile
 from gd_affix_relevance.ui.catalog import PROFILE_TABS, TabDefinition
+from gd_affix_relevance.ui.settings import (
+    CHARACTER_SAVE_ROOT_SETTING,
+    detect_default_character_save_root,
+    sanitize_path,
+)
 from gd_affix_relevance.ui.widgets import PackageAccordion
 from gd_affix_relevance.ui.skills_editor import SkillsEditor
 
@@ -41,9 +46,11 @@ class ProfileEditor(QWidget):
         profile_path: Path | None = None,
         profiles_root: Path | None = None,
         startup_notice: str = "",
+        settings: QSettings | None = None,
     ) -> None:
         super().__init__(parent)
         self.profile = profile or BuildProfile()
+        self.settings = settings
         self.accordions: dict[str, PackageAccordion] = {}
         self.current_profile_path = Path(profile_path) if profile_path else None
         self.profiles_root = (
@@ -94,6 +101,13 @@ class ProfileEditor(QWidget):
         self.save_button.setToolTip("Save build profile to a JSON file")
         self.save_button.clicked.connect(self._choose_profile_to_save)
         name_row.addWidget(self.save_button)
+        self.import_save_button = QPushButton("Import Character Save...", self)
+        self.import_save_button.setObjectName("profileAction")
+        self.import_save_button.setToolTip(
+            "Populate masteries and build-relevant skills from a player.gdc file"
+        )
+        self.import_save_button.clicked.connect(self._import_character_save)
+        name_row.addWidget(self.import_save_button)
         layout.addLayout(name_row)
 
         initial_status = (
@@ -326,6 +340,52 @@ class ProfileEditor(QWidget):
             QMessageBox.critical(self, "Could Not Save Profile", str(error))
             return False
         return True
+
+    def _import_character_save(self) -> None:
+        configured = ""
+        if self.settings is not None:
+            configured = sanitize_path(
+                self.settings.value(CHARACTER_SAVE_ROOT_SETTING, "", type=str)
+            )
+        default_root = (
+            Path(configured)
+            if configured
+            else detect_default_character_save_root()
+        )
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Character Save",
+            str(default_root),
+            "Grim Dawn Character Save (player.gdc);;All Files (*)",
+        )
+        if not selected:
+            return
+
+        try:
+            summary = self.skills_editor.import_from_character_save(Path(selected))
+        except (OSError, ValueError, TypeError) as error:
+            QMessageBox.critical(
+                self,
+                "Could Not Import Character Save",
+                str(error),
+            )
+            return
+
+        detected_masteries = (
+            ", ".join(summary.inferred_masteries)
+            if summary.inferred_masteries
+            else "None"
+        )
+        QMessageBox.information(
+            self,
+            "Character Save Imported",
+            "Imported skills from character save and updated the active profile.\n\n"
+            f"Skill references found: {summary.skill_references_found}\n"
+            f"Selectable skills imported: {summary.matched_skill_count}\n"
+            f"Detected masteries: {detected_masteries}\n\n"
+            "Physique/Cunning/Spirit are not imported yet. Current Grim Gleaner "
+            "scoring mainly uses semantic stat priorities and selected skills.",
+        )
 
     def _choose_profile_to_load(self) -> bool:
         starting_path = str(self.current_profile_path or self.profiles_root)

@@ -54,5 +54,14 @@
     "target_resistance_reduction_percent": 4,
     "total_damage_percent": 1,
     "vitality_resistance": 2
+  },
+  "grim_fusion_plan": {
+    "name": "My Build Plan",
+    "grimDawnPath": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Grim Dawn",
+    "paletteMode": "default",
+    "itemsPath": "C:\\repos\\grim_fusion\\fixtures\\shared\\items.json",
+    "gleanerRoot": "C:\\repos\\grim_fusion\\vendor\\grim_gleaner",
+    "python": "py -3.13",
+    "updatedAt": "2026-08-14T00:06:35.723Z"
   }
 }
