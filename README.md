@@ -118,3 +118,12 @@ This ensures the active localization already includes fusion/gdse colorization b
 ```powershell
 npm run dev -- run-with-gleaner --profile-dir vendor\grim_gleaner\artifacts\profiles\examples --items fixtures\shared\items.json --palette fixtures\shared\gdse-palette.txt --grim-dawn-path "C:\Program Files (x86)\Steam\steamapps\common\Grim Dawn"
 ```
+
+## Character save import support
+
+Character import in the vendored grim_gleaner UI is officially supported for
+Grim Dawn 1.2.x+ save formats.
+
+Older save formats are still attempted on a best-effort basis. When import is
+partial, the UI reports diagnostics and confidence metadata so you can decide
+whether to continue manually refining selected masteries/skills.
