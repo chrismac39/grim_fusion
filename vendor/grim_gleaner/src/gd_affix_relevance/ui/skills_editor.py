@@ -634,6 +634,12 @@ class SkillsEditor(QWidget):
                 if metadata.diagnostics
                 else ""
             )
+            debug_artifact_path = getattr(metadata, "debug_artifact_path", None)
+            artifact_hint = (
+                f"\n\nDebug artifact: {debug_artifact_path}"
+                if debug_artifact_path
+                else ""
+            )
             raise ValueError(
                 "No selectable mastery skills were found in that character save. "
                 f"Found {len(references)} skill references but none mapped to "
@@ -642,6 +648,7 @@ class SkillsEditor(QWidget):
                 + packed_hint
                 + compatibility_hint
                 + diagnostics_hint
+                + artifact_hint
                 + (
                     "\n\nSample unmatched references:\n" + sample
                     if sample

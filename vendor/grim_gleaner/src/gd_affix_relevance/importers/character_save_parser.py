@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 import tempfile
@@ -47,6 +48,7 @@ class CharacterSaveParseMetadata:
     partial_parse: bool
     confidence: float
     diagnostics: tuple[ParseDiagnostic, ...]
+    debug_artifact_path: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +102,7 @@ def parse_character_save(
     save_path: Path,
     *,
     parser_root: Path | None = None,
+    debug_dump: bool = False,
 ) -> CharacterSaveParseResult:
     """Parse a Grim Dawn character save into references plus diagnostics."""
 
@@ -153,6 +156,7 @@ def parse_character_save(
     inferred_masteries: set[str] = set()
     bytes_scanned = 0
     files_scanned: list[str] = []
+    probe_stats: list[dict[str, object]] = []
     for file_path in files:
         files_scanned.append(file_path.name)
         try:
@@ -169,7 +173,27 @@ def parse_character_save(
             )
             continue
         bytes_scanned += len(raw)
-        for view in _candidate_byte_views(raw, diagnostics, file_path):
+        file_probe: dict[str, object] = {
+            "file": file_path.name,
+            "size": len(raw),
+            "sha1": hashlib.sha1(raw).hexdigest(),
+            "first_bytes_hex": raw[:128].hex(),
+            "zlib": {
+                "marker_hits": 0,
+                "attempts": 0,
+                "successes": 0,
+                "failures": 0,
+            },
+            "crypto": {
+                "candidate_offsets": 0,
+                "attempts": 0,
+                "selected": 0,
+                "budget_exhausted": False,
+                "elapsed_ms": 0.0,
+            },
+        }
+        probe_stats.append(file_probe)
+        for view in _candidate_byte_views(raw, diagnostics, file_path, file_probe):
             for match in SKILL_REFERENCE_PATTERN.finditer(view):
                 text = match.group().decode("ascii", "ignore")
                 for parsed in _extract_text_references(text):
@@ -207,7 +231,7 @@ def parse_character_save(
         diagnostics=diagnostics,
         companion_count=companion_count,
     )
-    _maybe_write_debug_artifact(
+    debug_artifact_path = _maybe_write_debug_artifact(
         source,
         normalized,
         character_version,
@@ -219,6 +243,8 @@ def parse_character_save(
         partial_parse,
         confidence,
         diagnostics,
+        probe_stats,
+        debug_dump=debug_dump,
     )
 
     metadata = CharacterSaveParseMetadata(
@@ -233,6 +259,7 @@ def parse_character_save(
         partial_parse=partial_parse,
         confidence=confidence,
         diagnostics=tuple(diagnostics),
+        debug_artifact_path=debug_artifact_path,
     )
     return CharacterSaveParseResult(references=normalized, metadata=metadata)
 
@@ -249,10 +276,17 @@ def _maybe_write_debug_artifact(
     partial_parse: bool,
     confidence: float,
     diagnostics: list[ParseDiagnostic],
-) -> None:
+    probe_stats: list[dict[str, object]],
+    *,
+    debug_dump: bool,
+) -> str | None:
     flag = os.environ.get("GRIM_GLEANER_SAVE_PARSE_DEBUG", "").strip().lower()
-    if flag not in {"1", "true", "yes", "on"}:
-        return
+    forced = flag in {"1", "true", "yes", "on"}
+    should_write = forced or (
+        debug_dump and (partial_parse or len(references) == 0)
+    )
+    if not should_write:
+        return None
 
     payload = {
         "save_path": str(source),
@@ -266,6 +300,7 @@ def _maybe_write_debug_artifact(
         "partial_parse": partial_parse,
         "confidence": confidence,
         "references_sample": list(references[:20]),
+        "probe": probe_stats,
         "diagnostics": [
             {
                 "severity": diag.severity,
@@ -275,9 +310,18 @@ def _maybe_write_debug_artifact(
             }
             for diag in diagnostics
         ],
+        "debug_mode": {
+            "forced_by_env": forced,
+            "ui_debug_dump": debug_dump,
+        },
     }
 
-    debug_dir = Path(tempfile.gettempdir()) / "grim-gleaner-save-debug"
+    custom_dir = os.environ.get("GRIM_GLEANER_SAVE_PARSE_DEBUG_DIR", "").strip()
+    debug_dir = (
+        Path(custom_dir).expanduser().resolve()
+        if custom_dir
+        else Path(tempfile.gettempdir()) / "grim-gleaner-save-debug"
+    )
     debug_dir.mkdir(parents=True, exist_ok=True)
     stamp = int(time.time() * 1000)
     file_path = debug_dir / f"save-parse-{stamp}.json"
@@ -292,6 +336,7 @@ def _maybe_write_debug_artifact(
             source_file=source.name,
         ),
     )
+    return str(file_path)
 
 
 def describe_gdstash_compatibility(
@@ -362,6 +407,7 @@ def _candidate_byte_views(
     raw: bytes,
     diagnostics: list[ParseDiagnostic],
     source_file: Path,
+    probe: dict[str, object],
 ) -> tuple[bytes, ...]:
     # Some save sections may encode paths with interleaved null bytes (UTF-16-like).
     # Scanning both views catches those without needing a full save decoder.
@@ -371,19 +417,24 @@ def _candidate_byte_views(
     if compact != raw:
         views.append(compact)
 
-    for inflated in _inflated_byte_views(raw, diagnostics, source_file):
+    for inflated in _inflated_byte_views(raw, diagnostics, source_file, probe):
         views.append(inflated)
         inflated_compact = inflated.replace(b"\x00", b"")
         if inflated_compact != inflated:
             views.append(inflated_compact)
 
-    for decrypted in _decrypted_byte_views(raw, diagnostics, source_file):
+    for decrypted in _decrypted_byte_views(raw, diagnostics, source_file, probe):
         views.append(decrypted)
         decrypted_compact = decrypted.replace(b"\x00", b"")
         if decrypted_compact != decrypted:
             views.append(decrypted_compact)
 
-        for inflated in _inflated_byte_views(decrypted, diagnostics, source_file):
+        for inflated in _inflated_byte_views(
+            decrypted,
+            diagnostics,
+            source_file,
+            probe,
+        ):
             views.append(inflated)
             inflated_compact = inflated.replace(b"\x00", b"")
             if inflated_compact != inflated:
@@ -396,6 +447,7 @@ def _decrypted_byte_views(
     raw: bytes,
     diagnostics: list[ParseDiagnostic],
     source_file: Path,
+    probe: dict[str, object],
 ) -> tuple[bytes, ...]:
     """Return best-effort crypto-decoded byte views for encrypted save chunks."""
 
@@ -418,9 +470,14 @@ def _decrypted_byte_views(
     max_probe_ms = 700
     started = time.perf_counter()
     selected = 0
+    crypto_stats = probe.get("crypto")
+    if isinstance(crypto_stats, dict):
+        crypto_stats["candidate_offsets"] = len(candidate_offsets)
     for offset in candidate_offsets:
         elapsed_ms = (time.perf_counter() - started) * 1000
         if elapsed_ms > max_probe_ms:
+            if isinstance(crypto_stats, dict):
+                crypto_stats["budget_exhausted"] = True
             _append_diagnostic_once(
                 diagnostics,
                 ParseDiagnostic(
@@ -443,6 +500,8 @@ def _decrypted_byte_views(
             decoded = reader.decode_remaining(max_output_size=256 * 1024)
         except ValueError:
             continue
+        if isinstance(crypto_stats, dict):
+            crypto_stats["attempts"] = int(crypto_stats.get("attempts", 0)) + 1
         if len(decoded) < 24:
             continue
         # Keep views with explicit skill path signals or mastery identifiers.
@@ -457,6 +516,14 @@ def _decrypted_byte_views(
         seen.add(decoded)
         outputs.append(decoded)
         selected += 1
+        if isinstance(crypto_stats, dict):
+            crypto_stats["selected"] = selected
+
+    if isinstance(crypto_stats, dict):
+        crypto_stats["elapsed_ms"] = round(
+            (time.perf_counter() - started) * 1000,
+            3,
+        )
 
     if not outputs and source_file.name.casefold().startswith("player.g"):
         _append_diagnostic_once(
@@ -478,6 +545,7 @@ def _inflated_byte_views(
     raw: bytes,
     diagnostics: list[ParseDiagnostic],
     source_file: Path,
+    probe: dict[str, object],
 ) -> tuple[bytes, ...]:
     """Return best-effort zlib-inflated payloads from a binary save blob."""
 
@@ -487,15 +555,19 @@ def _inflated_byte_views(
     max_output_size = 2 * 1024 * 1024
 
     failures = 0
+    marker_hits = 0
+    attempts = 0
     for index, byte in enumerate(raw):
         # Common zlib/deflate stream starts. We still rely on successful
         # decompression to accept a candidate.
         if byte not in {0x78, 0x58, 0x68, 0x08}:
             continue
+        marker_hits += 1
         if len(outputs) >= max_candidates:
             break
         inflated_candidate: bytes | None = None
         for wbits in (zlib.MAX_WBITS, -zlib.MAX_WBITS, zlib.MAX_WBITS | 32):
+            attempts += 1
             try:
                 stream = zlib.decompressobj(wbits)
                 inflated = stream.decompress(raw[index:], max_output_size)
@@ -527,6 +599,13 @@ def _inflated_byte_views(
                 source_file=source_file.name,
             ),
         )
+
+    zlib_stats = probe.get("zlib")
+    if isinstance(zlib_stats, dict):
+        zlib_stats["marker_hits"] = marker_hits
+        zlib_stats["attempts"] = attempts
+        zlib_stats["successes"] = len(outputs)
+        zlib_stats["failures"] = failures
 
     return tuple(outputs)
 

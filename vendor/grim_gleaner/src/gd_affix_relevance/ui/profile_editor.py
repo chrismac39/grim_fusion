@@ -55,6 +55,7 @@ class _CharacterSaveParseWorker(QObject):
             parse_result = parse_character_save(
                 self.save_path,
                 parser_root=self.parser_root,
+                debug_dump=True,
             )
             compatibility = describe_gdstash_compatibility(
                 self.save_path,
