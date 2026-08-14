@@ -514,12 +514,28 @@ class SkillsEditor(QWidget):
         if not matched:
             unmatched = [reference for reference, resolved in resolved_pairs if resolved is None]
             sample = "\n".join(unmatched[:8])
+            source = Path(save_path).expanduser().resolve()
+            companion_count = len(
+                [
+                    candidate
+                    for candidate in source.parent.glob("player.g*")
+                    if candidate.is_file() and candidate.name.casefold() != "player.gdc"
+                ]
+            )
+            packed_hint = (
+                "\n\nThis character folder only has player.gdc (no player.g00/player.g01 "
+                "companions). In this packed save format, skill references may not be "
+                "extractable without a full Grim Dawn save decoder."
+                if len(references) == 0 and companion_count == 0
+                else ""
+            )
             raise ValueError(
                 "No selectable mastery skills were found in that character save. "
                 f"Found {len(references)} skill references but none mapped to "
                 "Gleaner's selectable mastery skills."
                 "\n\nTip: select player.gdc (or any file in the same character "
                 "folder) so companion files like player.g00/player.g01 can be read."
+                + packed_hint
                 + (
                     "\n\nSample unmatched references:\n" + sample
                     if sample
