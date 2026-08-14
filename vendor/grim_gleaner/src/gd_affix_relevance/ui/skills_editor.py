@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from collections import defaultdict
-from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import (
@@ -27,12 +25,6 @@ from gd_affix_relevance.ui.widgets import StatRow
 
 from gd_affix_relevance.catalog import SkillCatalog, SkillDefinition
 from gd_affix_relevance.domain import BuildProfile
-from gd_affix_relevance.importers.character_save_parser import (
-    CharacterSaveParseResult,
-    GDStashCompatibilityReport,
-    describe_gdstash_compatibility,
-    parse_character_save,
-)
 from gd_affix_relevance.ui.widgets import WeightControl
 
 
@@ -41,19 +33,6 @@ class MasterySkills:
     mastery_id: str
     display_name: str
     skills: tuple[SkillDefinition, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class CharacterSaveImportSummary:
-    save_path: Path
-    skill_references_found: int
-    matched_skill_count: int
-    inferred_masteries: tuple[str, ...]
-    import_mode: str
-    partial_parse: bool
-    confidence: float
-    compatibility: str
-    diagnostics: tuple[str, ...]
 
 
 def build_mastery_skills(catalog: SkillCatalog) -> tuple[MasterySkills, ...]:
@@ -368,18 +347,6 @@ class SkillsEditor(QWidget):
         self.masteries_by_id = {
             mastery.mastery_id: mastery for mastery in self.masteries
         }
-        self.catalog_skills_by_id = {
-            _normalize_skill_reference(skill.skill_id): skill
-            for skill in catalog.skills
-        }
-        self.skills_by_id = {
-            _normalize_skill_reference(skill.skill_id): skill
-            for mastery in self.masteries
-            for skill in mastery.skills
-        }
-        self.skills_by_stem: dict[str, list[str]] = defaultdict(list)
-        for skill_id in self.skills_by_id:
-            self.skills_by_stem[Path(skill_id).stem].append(skill_id)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 12, 10, 12)
@@ -499,230 +466,6 @@ class SkillsEditor(QWidget):
         self.profile.set_weight(stat_id, weight)
         self.changed.emit()
 
-    def import_from_character_save(
-        self,
-        save_path: Path,
-        *,
-        parser_root: Path | None = None,
-    ) -> CharacterSaveImportSummary:
-        """Populate masteries and build-relevant skills from a character save."""
-
-        parse_result = parse_character_save(save_path, parser_root=parser_root)
-        compatibility = describe_gdstash_compatibility(
-            save_path,
-            parser_root=parser_root,
-        )
-        return self.import_from_parsed_character_save(
-            Path(save_path),
-            parse_result,
-            compatibility,
-        )
-
-    def import_from_parsed_character_save(
-        self,
-        save_path: Path,
-        parse_result: CharacterSaveParseResult,
-        compatibility: GDStashCompatibilityReport,
-    ) -> CharacterSaveImportSummary:
-        """Apply parsed character-save data to the active profile."""
-
-        references = parse_result.references
-        metadata = parse_result.metadata
-        resolved_pairs = [
-            (reference, self._resolve_import_skill_id(reference))
-            for reference in references
-        ]
-        matched = tuple(
-            sorted(
-                {
-                    resolved
-                    for _, resolved in resolved_pairs
-                    if resolved is not None
-                }
-            )
-        )
-        if not matched and metadata.inferred_masteries:
-            selected_masteries = list(metadata.inferred_masteries[:2])
-            while len(selected_masteries) < 2:
-                selected_masteries.append("")
-
-            self.profile.clear_skills()
-            self.profile.set_mastery(0, "")
-            self.profile.set_mastery(1, "")
-            if selected_masteries[0]:
-                self.profile.set_mastery(0, selected_masteries[0])
-            if selected_masteries[1]:
-                self.profile.set_mastery(1, selected_masteries[1])
-
-            self.refresh_from_profile()
-            self.changed.emit()
-            return CharacterSaveImportSummary(
-                save_path=Path(save_path).expanduser().resolve(),
-                skill_references_found=len(references),
-                matched_skill_count=0,
-                inferred_masteries=tuple(
-                    mastery_id for mastery_id in selected_masteries if mastery_id
-                ),
-                import_mode="masteries_only",
-                partial_parse=metadata.partial_parse,
-                confidence=metadata.confidence,
-                compatibility=compatibility.as_text(),
-                diagnostics=tuple(diag.message for diag in metadata.diagnostics),
-            )
-
-        if (
-            not matched
-            and len(references) == 0
-            and not metadata.inferred_masteries
-            and compatibility.character_version is not None
-            and metadata.character_level is not None
-            and metadata.character_level <= 3
-        ):
-            self.profile.clear_skills()
-            self.profile.set_mastery(0, "")
-            self.profile.set_mastery(1, "")
-            self.refresh_from_profile()
-            self.changed.emit()
-
-            diagnostics = [diag.message for diag in metadata.diagnostics]
-            diagnostics.append(
-                "No mastery or selectable skill references were found. "
-                "This can be normal for a new or unallocated character."
-            )
-            return CharacterSaveImportSummary(
-                save_path=Path(save_path).expanduser().resolve(),
-                skill_references_found=0,
-                matched_skill_count=0,
-                inferred_masteries=(),
-                import_mode="empty_character",
-                partial_parse=metadata.partial_parse,
-                confidence=metadata.confidence,
-                compatibility=compatibility.as_text(),
-                diagnostics=tuple(diagnostics),
-            )
-
-        if not matched:
-            unmatched = [reference for reference, resolved in resolved_pairs if resolved is None]
-            sample = "\n".join(unmatched[:8])
-            source = Path(save_path).expanduser().resolve()
-            companion_count = len(
-                [
-                    candidate
-                    for candidate in source.parent.glob("player.g*")
-                    if candidate.is_file() and candidate.name.casefold() != "player.gdc"
-                ]
-            )
-            packed_hint = (
-                "\n\nThis character folder only has player.gdc (no player.g00/player.g01 "
-                "companions). In this packed save format, skill references may not be "
-                "extractable without complete format support."
-                if len(references) == 0 and companion_count == 0
-                else ""
-            )
-            tip = (
-                "\n\nTip: select player.gdc (or any file in the same character "
-                "folder) so companion files like player.g00/player.g01 can be read."
-                if companion_count > 0
-                else "\n\nTip: choose masteries manually and then add key build skills in the Skills tab."
-            )
-            compatibility_hint = (
-                "\n\nGDStash compatibility check: " + compatibility.as_text()
-            )
-            diagnostics_hint = (
-                "\n\nParser diagnostics:\n- "
-                + "\n- ".join(diag.message for diag in metadata.diagnostics)
-                if metadata.diagnostics
-                else ""
-            )
-            debug_artifact_path = getattr(metadata, "debug_artifact_path", None)
-            artifact_hint = (
-                f"\n\nDebug artifact: {debug_artifact_path}"
-                if debug_artifact_path
-                else ""
-            )
-            raise ValueError(
-                "No selectable mastery skills were found in that character save. "
-                f"Found {len(references)} skill references but none mapped to "
-                "Gleaner's selectable mastery skills."
-                + tip
-                + packed_hint
-                + compatibility_hint
-                + diagnostics_hint
-                + artifact_hint
-                + (
-                    "\n\nSample unmatched references:\n" + sample
-                    if sample
-                    else ""
-                )
-            )
-
-        mastery_counts: dict[str, int] = {}
-        for skill_id in matched:
-            mastery_id = self.skills_by_id[skill_id].mastery_id
-            if not mastery_id:
-                continue
-            mastery_counts[mastery_id] = mastery_counts.get(mastery_id, 0) + 1
-
-        ranked_masteries = [
-            mastery_id
-            for mastery_id, _ in sorted(
-                mastery_counts.items(),
-                key=lambda pair: (-pair[1], _mastery_sort_key(pair[0])),
-            )
-        ]
-        selected_masteries = (ranked_masteries + ["", ""])[:2]
-
-        self.profile.clear_skills()
-        self.profile.set_mastery(0, "")
-        self.profile.set_mastery(1, "")
-        if selected_masteries[0]:
-            self.profile.set_mastery(0, selected_masteries[0])
-        if selected_masteries[1]:
-            self.profile.set_mastery(1, selected_masteries[1])
-        for skill_id in matched:
-            self.profile.set_skill_weight(skill_id, 1)
-
-        self.refresh_from_profile()
-        self.changed.emit()
-
-        return CharacterSaveImportSummary(
-            save_path=Path(save_path).expanduser().resolve(),
-            skill_references_found=len(references),
-            matched_skill_count=len(matched),
-            inferred_masteries=tuple(
-                mastery_id for mastery_id in selected_masteries if mastery_id
-            ),
-            import_mode="skills_and_masteries",
-            partial_parse=metadata.partial_parse,
-            confidence=metadata.confidence,
-            compatibility=compatibility.as_text(),
-            diagnostics=tuple(diag.message for diag in metadata.diagnostics),
-        )
-
-    def _resolve_import_skill_id(self, reference: str) -> str | None:
-        normalized = _normalize_skill_reference(reference)
-        if normalized in self.skills_by_id:
-            return normalized
-
-        # Many saved references point to modifiers/controllers. Walk parent links
-        # until a selectable skill is found.
-        current = self.catalog_skills_by_id.get(normalized)
-        visited: set[str] = set()
-        while current is not None:
-            parent = _normalize_skill_reference(current.parent_skill_id)
-            if not parent or parent in visited:
-                break
-            if parent in self.skills_by_id:
-                return parent
-            visited.add(parent)
-            current = self.catalog_skills_by_id.get(parent)
-
-        stem = Path(normalized).stem
-        candidates = self.skills_by_stem.get(stem, [])
-        if len(candidates) == 1:
-            return candidates[0]
-        return None
-
 
 def _mastery_sort_key(mastery_id: str) -> tuple[int, str]:
     suffix = mastery_id.removeprefix("playerclass")
@@ -732,5 +475,3 @@ def _mastery_sort_key(mastery_id: str) -> tuple[int, str]:
         return 999, mastery_id
 
 
-def _normalize_skill_reference(value: str) -> str:
-    return value.strip().replace("\\", "/").casefold()
