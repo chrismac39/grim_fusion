@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QSignalBlocker, Signal
+from PySide6.QtCore import QObject, QSettings, QSignalBlocker, QThread, Signal, Slot
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QScrollArea,
     QTabWidget,
@@ -21,6 +22,12 @@ from PySide6.QtWidgets import (
 
 from gd_affix_relevance.catalog import SkillCatalog
 from gd_affix_relevance.domain import BuildProfile
+from gd_affix_relevance.importers.character_save_parser import (
+    CharacterSaveParseResult,
+    GDStashCompatibilityReport,
+    describe_gdstash_compatibility,
+    parse_character_save,
+)
 from gd_affix_relevance.profile_store import load_profile, save_profile
 from gd_affix_relevance.ui.catalog import PROFILE_TABS, TabDefinition
 from gd_affix_relevance.ui.settings import (
@@ -31,6 +38,32 @@ from gd_affix_relevance.ui.settings import (
 )
 from gd_affix_relevance.ui.widgets import PackageAccordion
 from gd_affix_relevance.ui.skills_editor import SkillsEditor
+
+
+class _CharacterSaveParseWorker(QObject):
+    finished = Signal(object, object)
+    failed = Signal(str)
+
+    def __init__(self, save_path: Path, parser_root: Path | None) -> None:
+        super().__init__()
+        self.save_path = Path(save_path)
+        self.parser_root = parser_root
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            parse_result = parse_character_save(
+                self.save_path,
+                parser_root=self.parser_root,
+            )
+            compatibility = describe_gdstash_compatibility(
+                self.save_path,
+                parser_root=self.parser_root,
+            )
+        except (OSError, ValueError, TypeError) as error:
+            self.failed.emit(str(error))
+            return
+        self.finished.emit(parse_result, compatibility)
 
 
 class ProfileEditor(QWidget):
@@ -61,6 +94,9 @@ class ProfileEditor(QWidget):
         )
         self.profiles_root.mkdir(parents=True, exist_ok=True)
         self.is_dirty = False
+        self._parse_thread: QThread | None = None
+        self._parse_worker: _CharacterSaveParseWorker | None = None
+        self._parse_progress: QProgressDialog | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
@@ -373,10 +409,57 @@ class ProfileEditor(QWidget):
         if not selected:
             return
 
-        try:
-            summary = self.skills_editor.import_from_character_save(
+        if self._parse_thread is not None:
+            QMessageBox.information(
+                self,
+                "Import In Progress",
+                "Character save import is already running.",
+            )
+            return
+
+        self.import_save_button.setEnabled(False)
+        self._parse_progress = QProgressDialog(
+            "Parsing character save...",
+            "",
+            0,
+            0,
+            self,
+        )
+        self._parse_progress.setWindowTitle("Import Character Save")
+        self._parse_progress.setCancelButton(None)
+        self._parse_progress.setMinimumDuration(0)
+        self._parse_progress.setAutoClose(False)
+        self._parse_progress.setAutoReset(False)
+        self._parse_progress.show()
+
+        self._parse_thread = QThread(self)
+        self._parse_worker = _CharacterSaveParseWorker(Path(selected), parser_root)
+        self._parse_worker.moveToThread(self._parse_thread)
+        self._parse_thread.started.connect(self._parse_worker.run)
+        self._parse_worker.finished.connect(
+            lambda parse_result, compatibility: self._on_parse_success(
                 Path(selected),
-                parser_root=parser_root,
+                parse_result,
+                compatibility,
+            )
+        )
+        self._parse_worker.failed.connect(self._on_parse_failure)
+        self._parse_worker.finished.connect(self._cleanup_parse_worker)
+        self._parse_worker.failed.connect(self._cleanup_parse_worker)
+        self._parse_thread.start()
+
+    @Slot(object, object)
+    def _on_parse_success(
+        self,
+        save_path: Path,
+        parse_result: CharacterSaveParseResult,
+        compatibility: GDStashCompatibilityReport,
+    ) -> None:
+        try:
+            summary = self.skills_editor.import_from_parsed_character_save(
+                save_path,
+                parse_result,
+                compatibility,
             )
         except (OSError, ValueError, TypeError) as error:
             QMessageBox.critical(
@@ -423,6 +506,30 @@ class ProfileEditor(QWidget):
             "Physique/Cunning/Spirit are not imported yet. Current Grim Gleaner "
             "scoring mainly uses semantic stat priorities and selected skills.",
         )
+
+    @Slot(str)
+    def _on_parse_failure(self, message: str) -> None:
+        QMessageBox.critical(
+            self,
+            "Could Not Import Character Save",
+            message,
+        )
+
+    @Slot()
+    def _cleanup_parse_worker(self) -> None:
+        if self._parse_thread is not None:
+            self._parse_thread.quit()
+            self._parse_thread.wait(2000)
+            self._parse_thread.deleteLater()
+            self._parse_thread = None
+        if self._parse_worker is not None:
+            self._parse_worker.deleteLater()
+            self._parse_worker = None
+        if self._parse_progress is not None:
+            self._parse_progress.hide()
+            self._parse_progress.deleteLater()
+            self._parse_progress = None
+        self.import_save_button.setEnabled(True)
 
     def _choose_profile_to_load(self) -> bool:
         starting_path = str(self.current_profile_path or self.profiles_root)

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+import os
+import tempfile
 import time
 import re
 import zlib
@@ -204,6 +207,20 @@ def parse_character_save(
         diagnostics=diagnostics,
         companion_count=companion_count,
     )
+    _maybe_write_debug_artifact(
+        source,
+        normalized,
+        character_version,
+        character_level,
+        supported,
+        tuple(files_scanned),
+        bytes_scanned,
+        tuple(sorted(inferred_masteries)),
+        partial_parse,
+        confidence,
+        diagnostics,
+    )
+
     metadata = CharacterSaveParseMetadata(
         character_version=character_version,
         character_level=character_level,
@@ -218,6 +235,63 @@ def parse_character_save(
         diagnostics=tuple(diagnostics),
     )
     return CharacterSaveParseResult(references=normalized, metadata=metadata)
+
+
+def _maybe_write_debug_artifact(
+    source: Path,
+    references: tuple[str, ...],
+    character_version: int | None,
+    character_level: int | None,
+    supported_by_gdstash: bool | None,
+    files_scanned: tuple[str, ...],
+    bytes_scanned: int,
+    inferred_masteries: tuple[str, ...],
+    partial_parse: bool,
+    confidence: float,
+    diagnostics: list[ParseDiagnostic],
+) -> None:
+    flag = os.environ.get("GRIM_GLEANER_SAVE_PARSE_DEBUG", "").strip().lower()
+    if flag not in {"1", "true", "yes", "on"}:
+        return
+
+    payload = {
+        "save_path": str(source),
+        "character_version": character_version,
+        "character_level": character_level,
+        "supported_by_gdstash": supported_by_gdstash,
+        "files_scanned": list(files_scanned),
+        "bytes_scanned": bytes_scanned,
+        "references_found": len(references),
+        "inferred_masteries": list(inferred_masteries),
+        "partial_parse": partial_parse,
+        "confidence": confidence,
+        "references_sample": list(references[:20]),
+        "diagnostics": [
+            {
+                "severity": diag.severity,
+                "code": diag.code,
+                "message": diag.message,
+                "source_file": diag.source_file,
+            }
+            for diag in diagnostics
+        ],
+    }
+
+    debug_dir = Path(tempfile.gettempdir()) / "grim-gleaner-save-debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    stamp = int(time.time() * 1000)
+    file_path = debug_dir / f"save-parse-{stamp}.json"
+    file_path.write_text(f"{json.dumps(payload, indent=2)}\n", encoding="utf-8")
+
+    _append_diagnostic_once(
+        diagnostics,
+        ParseDiagnostic(
+            severity="info",
+            code="debug_artifact_written",
+            message=f"Wrote parser debug artifact: {file_path}",
+            source_file=source.name,
+        ),
+    )
 
 
 def describe_gdstash_compatibility(

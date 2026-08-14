@@ -28,6 +28,8 @@ from gd_affix_relevance.ui.widgets import StatRow
 from gd_affix_relevance.catalog import SkillCatalog, SkillDefinition
 from gd_affix_relevance.domain import BuildProfile
 from gd_affix_relevance.importers.character_save_parser import (
+    CharacterSaveParseResult,
+    GDStashCompatibilityReport,
     describe_gdstash_compatibility,
     parse_character_save,
 )
@@ -506,12 +508,26 @@ class SkillsEditor(QWidget):
         """Populate masteries and build-relevant skills from a character save."""
 
         parse_result = parse_character_save(save_path, parser_root=parser_root)
-        references = parse_result.references
-        metadata = parse_result.metadata
         compatibility = describe_gdstash_compatibility(
             save_path,
             parser_root=parser_root,
         )
+        return self.import_from_parsed_character_save(
+            Path(save_path),
+            parse_result,
+            compatibility,
+        )
+
+    def import_from_parsed_character_save(
+        self,
+        save_path: Path,
+        parse_result: CharacterSaveParseResult,
+        compatibility: GDStashCompatibilityReport,
+    ) -> CharacterSaveImportSummary:
+        """Apply parsed character-save data to the active profile."""
+
+        references = parse_result.references
+        metadata = parse_result.metadata
         resolved_pairs = [
             (reference, self._resolve_import_skill_id(reference))
             for reference in references
