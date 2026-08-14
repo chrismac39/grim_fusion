@@ -391,13 +391,26 @@ class ProfileEditor(QWidget):
             if summary.inferred_masteries
             else "None"
         )
+        diagnostics = (
+            "\n".join(f"- {line}" for line in summary.diagnostics)
+            if summary.diagnostics
+            else "- none"
+        )
+        parse_quality = (
+            "partial"
+            if summary.partial_parse
+            else "complete"
+        )
         QMessageBox.information(
             self,
             "Character Save Imported",
             "Imported skills from character save and updated the active profile.\n\n"
             f"Skill references found: {summary.skill_references_found}\n"
             f"Selectable skills imported: {summary.matched_skill_count}\n"
-            f"Detected masteries: {detected_masteries}\n\n"
+            f"Detected masteries: {detected_masteries}\n"
+            f"Parse confidence: {summary.confidence:.2f} ({parse_quality})\n\n"
+            f"Compatibility: {summary.compatibility}\n\n"
+            f"Diagnostics:\n{diagnostics}\n\n"
             "Physique/Cunning/Spirit are not imported yet. Current Grim Gleaner "
             "scoring mainly uses semantic stat priorities and selected skills.",
         )

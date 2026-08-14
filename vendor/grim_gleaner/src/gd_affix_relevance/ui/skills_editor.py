@@ -29,7 +29,7 @@ from gd_affix_relevance.catalog import SkillCatalog, SkillDefinition
 from gd_affix_relevance.domain import BuildProfile
 from gd_affix_relevance.importers.character_save_parser import (
     describe_gdstash_compatibility,
-    extract_skill_references,
+    parse_character_save,
 )
 from gd_affix_relevance.ui.widgets import WeightControl
 
@@ -47,6 +47,10 @@ class CharacterSaveImportSummary:
     skill_references_found: int
     matched_skill_count: int
     inferred_masteries: tuple[str, ...]
+    partial_parse: bool
+    confidence: float
+    compatibility: str
+    diagnostics: tuple[str, ...]
 
 
 def build_mastery_skills(catalog: SkillCatalog) -> tuple[MasterySkills, ...]:
@@ -500,7 +504,9 @@ class SkillsEditor(QWidget):
     ) -> CharacterSaveImportSummary:
         """Populate masteries and build-relevant skills from a character save."""
 
-        references = extract_skill_references(save_path, parser_root=parser_root)
+        parse_result = parse_character_save(save_path, parser_root=parser_root)
+        references = parse_result.references
+        metadata = parse_result.metadata
         compatibility = describe_gdstash_compatibility(
             save_path,
             parser_root=parser_root,
@@ -539,6 +545,12 @@ class SkillsEditor(QWidget):
             compatibility_hint = (
                 "\n\nGDStash compatibility check: " + compatibility.as_text()
             )
+            diagnostics_hint = (
+                "\n\nParser diagnostics:\n- "
+                + "\n- ".join(diag.message for diag in metadata.diagnostics)
+                if metadata.diagnostics
+                else ""
+            )
             raise ValueError(
                 "No selectable mastery skills were found in that character save. "
                 f"Found {len(references)} skill references but none mapped to "
@@ -547,6 +559,7 @@ class SkillsEditor(QWidget):
                 "folder) so companion files like player.g00/player.g01 can be read."
                 + packed_hint
                 + compatibility_hint
+                + diagnostics_hint
                 + (
                     "\n\nSample unmatched references:\n" + sample
                     if sample
@@ -590,6 +603,10 @@ class SkillsEditor(QWidget):
             inferred_masteries=tuple(
                 mastery_id for mastery_id in selected_masteries if mastery_id
             ),
+            partial_parse=metadata.partial_parse,
+            confidence=metadata.confidence,
+            compatibility=compatibility.as_text(),
+            diagnostics=tuple(diag.message for diag in metadata.diagnostics),
         )
 
     def _resolve_import_skill_id(self, reference: str) -> str | None:
