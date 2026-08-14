@@ -311,6 +311,7 @@ def test_import_from_valid_empty_character_does_not_fail(
         references=(),
         metadata=SimpleNamespace(
             inferred_masteries=(),
+            character_level=1,
             partial_parse=True,
             confidence=0.55,
             diagnostics=(),
@@ -347,6 +348,7 @@ def test_import_still_errors_for_invalid_non_save_payload(
         references=(),
         metadata=SimpleNamespace(
             inferred_masteries=(),
+            character_level=None,
             partial_parse=True,
             confidence=0.0,
             diagnostics=(),
@@ -369,5 +371,42 @@ def test_import_still_errors_for_invalid_non_save_payload(
     try:
         editor.import_from_character_save(Path("not-a-save.bin"))
         raise AssertionError("expected import to fail for invalid payload")
+    except ValueError as error:
+        assert "No selectable mastery skills were found" in str(error)
+
+
+def test_import_leveled_character_without_extracted_skills_errors(
+    monkeypatch,
+) -> None:
+    _application()
+    editor = SkillsEditor(BuildProfile(), _catalog())
+
+    parse_result = SimpleNamespace(
+        references=(),
+        metadata=SimpleNamespace(
+            inferred_masteries=(),
+            character_level=52,
+            partial_parse=True,
+            confidence=0.21,
+            diagnostics=(),
+        ),
+    )
+    compatibility = SimpleNamespace(
+        character_version=8,
+        as_text=lambda: "version 8 supported",
+    )
+
+    import gd_affix_relevance.ui.skills_editor as skills_editor_module
+
+    monkeypatch.setattr(skills_editor_module, "parse_character_save", lambda *_args, **_kwargs: parse_result)
+    monkeypatch.setattr(
+        skills_editor_module,
+        "describe_gdstash_compatibility",
+        lambda *_args, **_kwargs: compatibility,
+    )
+
+    try:
+        editor.import_from_character_save(Path("player.gdc"))
+        raise AssertionError("expected import to fail for leveled extraction miss")
     except ValueError as error:
         assert "No selectable mastery skills were found" in str(error)

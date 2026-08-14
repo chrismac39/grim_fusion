@@ -559,6 +559,8 @@ class SkillsEditor(QWidget):
             and len(references) == 0
             and not metadata.inferred_masteries
             and compatibility.character_version is not None
+            and metadata.character_level is not None
+            and metadata.character_level <= 3
         ):
             self.profile.clear_skills()
             self.profile.set_mastery(0, "")

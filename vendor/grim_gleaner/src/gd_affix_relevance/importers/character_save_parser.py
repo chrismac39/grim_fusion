@@ -33,6 +33,7 @@ class ParseDiagnostic:
 @dataclass(frozen=True, slots=True)
 class CharacterSaveParseMetadata:
     character_version: int | None
+    character_level: int | None
     supported_by_gdstash: bool | None
     source: str
     files_scanned: tuple[str, ...]
@@ -48,6 +49,12 @@ class CharacterSaveParseMetadata:
 class CharacterSaveParseResult:
     references: tuple[str, ...]
     metadata: CharacterSaveParseMetadata
+
+
+@dataclass(frozen=True, slots=True)
+class CharacterHeaderInfo:
+    character_version: int
+    character_level: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +109,9 @@ def parse_character_save(
         if gdstash_root is not None
         else "bundled compatibility profile"
     )
-    character_version = _decode_character_version(source)
+    header = _decode_character_header(source)
+    character_version = header.character_version if header is not None else None
+    character_level = header.character_level if header is not None else None
     supported = (
         character_version in GDSTASH_SUPPORTED_CHARACTER_VERSIONS
         if character_version is not None
@@ -196,6 +205,7 @@ def parse_character_save(
     )
     metadata = CharacterSaveParseMetadata(
         character_version=character_version,
+        character_level=character_level,
         supported_by_gdstash=supported,
         source=source_text,
         files_scanned=tuple(files_scanned),
@@ -220,7 +230,8 @@ def describe_gdstash_compatibility(
     if not source.is_file():
         raise ValueError(f"character save file does not exist: {source}")
 
-    char_version = _decode_character_version(source)
+    header = _decode_character_header(source)
+    char_version = header.character_version if header is not None else None
     supported = (
         char_version in GDSTASH_SUPPORTED_CHARACTER_VERSIONS
         if char_version is not None
@@ -547,8 +558,8 @@ class _GDStashCryptoReader:
         return bytes(out)
 
 
-def _decode_character_version(source: Path) -> int | None:
-    """Decode the top-level character format version from *player.gdc*."""
+def _decode_character_header(source: Path) -> CharacterHeaderInfo | None:
+    """Decode top-level header fields (version and level) from *player.gdc*."""
 
     if source.name.casefold() != "player.gdc":
         source = source.parent / "player.gdc"
@@ -563,10 +574,11 @@ def _decode_character_version(source: Path) -> int | None:
         reader.read_wide_string()  # character name
         reader.read_byte()  # sex
         reader.read_string()  # class/tag
-        reader.read_int()  # level
+        level = reader.read_int()  # level
         reader.read_byte()  # hardcore
         reader.read_byte()  # start byte marker (typically 3)
         reader.read_int(update_key=False)  # marker value (typically 0)
-        return reader.read_int()
+        version = reader.read_int()
+        return CharacterHeaderInfo(character_version=version, character_level=level)
     except (OSError, ValueError):
         return None

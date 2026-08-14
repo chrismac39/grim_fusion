@@ -132,6 +132,7 @@ def test_parse_character_save_reports_partial_parse_and_diagnostics(
     assert result.references == ()
     assert result.metadata.partial_parse
     assert result.metadata.references_found == 0
+    assert result.metadata.character_level is None
     assert result.metadata.files_scanned == ("player.gdc",)
     assert result.metadata.confidence < 0.5
     assert any(
