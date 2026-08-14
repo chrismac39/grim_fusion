@@ -10,6 +10,29 @@ from gd_affix_relevance.importers.character_save_parser import (
 )
 
 
+def _encrypt_like_gdstash(decoded: bytes, *, seed_raw: int = 0x12345678) -> bytes:
+    """Build a synthetic stream compatible with _GDStashCryptoReader decoding."""
+
+    xor_bitmap = 0x55555555
+    table_mult = 39916801
+    key_seed = seed_raw ^ xor_bitmap
+    key = key_seed & 0xFFFFFFFF
+    table: list[int] = []
+    current = key_seed & 0xFFFFFFFF
+    for _ in range(256):
+        current = ((current >> 1) | ((current & 1) << 31)) & 0xFFFFFFFF
+        current = (current * table_mult) & 0xFFFFFFFF
+        table.append(current)
+
+    encrypted = bytearray(seed_raw.to_bytes(4, "little"))
+    for value in decoded:
+        raw = (value ^ (key & 0xFF)) & 0xFF
+        encrypted.append(raw)
+        key ^= table[raw]
+        key &= 0xFFFFFFFF
+    return bytes(encrypted)
+
+
 def test_extract_skill_references_normalizes_and_deduplicates(tmp_path: Path) -> None:
     payload = (
         b"noise"
@@ -79,6 +102,23 @@ def test_parse_character_save_extracts_references_from_compressed_block(
     )
     assert result.metadata.references_found == 1
     assert result.metadata.confidence > 0.4
+
+
+def test_parse_character_save_extracts_references_from_crypto_decoded_stream(
+    tmp_path: Path,
+) -> None:
+    decoded = (
+        b"prefix\x00"
+        b"records/skills/playerclass04/bloodburst1.dbr\x00"
+        b"suffix"
+    )
+    payload = _encrypt_like_gdstash(decoded)
+    source = tmp_path / "player.g00"
+    source.write_bytes(payload)
+
+    result = parse_character_save(source)
+
+    assert "records/skills/playerclass04/bloodburst1.dbr" in result.references
 
 
 def test_parse_character_save_reports_partial_parse_and_diagnostics(

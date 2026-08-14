@@ -266,7 +266,69 @@ def _candidate_byte_views(
         if inflated_compact != inflated:
             views.append(inflated_compact)
 
+    for decrypted in _decrypted_byte_views(raw, diagnostics, source_file):
+        views.append(decrypted)
+        decrypted_compact = decrypted.replace(b"\x00", b"")
+        if decrypted_compact != decrypted:
+            views.append(decrypted_compact)
+
+        for inflated in _inflated_byte_views(decrypted, diagnostics, source_file):
+            views.append(inflated)
+            inflated_compact = inflated.replace(b"\x00", b"")
+            if inflated_compact != inflated:
+                views.append(inflated_compact)
+
     return tuple(views)
+
+
+def _decrypted_byte_views(
+    raw: bytes,
+    diagnostics: list[ParseDiagnostic],
+    source_file: Path,
+) -> tuple[bytes, ...]:
+    """Return best-effort crypto-decoded byte views for encrypted save chunks."""
+
+    if len(raw) < 12:
+        return ()
+
+    outputs: list[bytes] = []
+    seen: set[bytes] = set()
+
+    # Some companion chunks can be independently encrypted streams.
+    # Try decoding from multiple plausible offsets, keeping only views
+    # that contain path-like separators or record roots.
+    candidate_offsets = (0, 4, 8)
+    for offset in candidate_offsets:
+        if len(raw) - offset < 12:
+            continue
+        segment = raw[offset:]
+        try:
+            reader = _GDStashCryptoReader(segment)
+            decoded = reader.decode_remaining()
+        except ValueError:
+            continue
+        if len(decoded) < 24:
+            continue
+        if b"/" not in decoded and b"\\" not in decoded and b"records" not in decoded.lower():
+            continue
+        if decoded in seen:
+            continue
+        seen.add(decoded)
+        outputs.append(decoded)
+
+    if not outputs and source_file.name.casefold().startswith("player.g"):
+        diagnostics.append(
+            ParseDiagnostic(
+                severity="info",
+                code="crypto_decode_no_payload",
+                message=(
+                    "No useful crypto-decoded payload was detected in this chunk."
+                ),
+                source_file=source_file.name,
+            )
+        )
+
+    return tuple(outputs)
 
 
 def _inflated_byte_views(
@@ -443,6 +505,19 @@ class _GDStashCryptoReader:
             out[index] = (value ^ (self.key & 0xFF)) & 0xFF
             self._update_key_raw_bytes(bytes((value,)))
         return out.decode("utf-8", "ignore")
+
+    def decode_remaining(self, *, max_output_size: int = 16 * 1024 * 1024) -> bytes:
+        """Decode remaining stream bytes using GDStash-style rolling key updates."""
+
+        out = bytearray()
+        while self.pos < len(self.data):
+            if len(out) >= max_output_size:
+                break
+            raw = self.data[self.pos]
+            self.pos += 1
+            out.append((raw ^ (self.key & 0xFF)) & 0xFF)
+            self._update_key_raw_bytes(bytes((raw,)))
+        return bytes(out)
 
 
 def _decode_character_version(source: Path) -> int | None:
