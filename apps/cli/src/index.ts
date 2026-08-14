@@ -10,8 +10,6 @@ import path from "node:path";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
-import { createInterface } from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
 
 import {
   applyPaletteOverrides,
@@ -963,24 +961,6 @@ function savePlan(plan: BuildPlan): string {
   }
 }
 
-async function choosePlanInteractively(
-  rl: ReturnType<typeof createInterface>,
-  plans: BuildPlan[]
-): Promise<BuildPlan> {
-  if (plans.length === 0) {
-    throw new Error("No saved plans found.");
-  }
-
-  console.log("Available plans:");
-  plans.forEach((p, idx) => {
-    console.log(`  ${idx + 1}. ${p.name} (${p.updatedAt})`);
-  });
-
-  const selectionRaw = await ask(rl, `Choose plan [${plans.length}]: `);
-  const index = Number.parseInt(selectionRaw || String(plans.length), 10) - 1;
-  return plans[index] ?? plans[plans.length - 1];
-}
-
 function applyPlan(
   plan: BuildPlan,
   forceApply = false
@@ -1038,22 +1018,15 @@ async function runApplyPlan(args: CliArgs): Promise<void> {
     );
   }
 
-  const plan = args.planName
-    ? findPlanByName(plans, args.planName)
-    : undefined;
+  if (!args.planName?.trim()) {
+    throw new Error(
+      "Missing required option --plan-name <name>. Plan selection is UI-first and non-interactive."
+    );
+  }
 
-  let selected: BuildPlan;
-  if (plan) {
-    selected = plan;
-  } else if (args.planName) {
+  const selected = findPlanByName(plans, args.planName);
+  if (!selected) {
     throw new Error(`No plan named '${args.planName}' found.`);
-  } else {
-    const rl = createInterface({ input, output });
-    try {
-      selected = await choosePlanInteractively(rl, plans);
-    } finally {
-      rl.close();
-    }
   }
 
   const result = applyPlan(selected, args.forceApply ?? false);
@@ -1062,73 +1035,6 @@ async function runApplyPlan(args: CliArgs): Promise<void> {
       ? `Applied fusion text to ${result.targetFile}`
       : `Plan unchanged. Existing text kept at ${result.targetFile}`
   );
-}
-
-async function ask(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {
-  return (await rl.question(question)).trim();
-}
-
-async function askYesNo(
-  rl: ReturnType<typeof createInterface>,
-  question: string,
-  defaultYes = true
-): Promise<boolean> {
-  const suffix = defaultYes ? " [Y/n]: " : " [y/N]: ";
-  const answer = (await ask(rl, `${question}${suffix}`)).toLowerCase();
-  if (!answer) {
-    return defaultYes;
-  }
-  return answer === "y" || answer === "yes";
-}
-
-async function askExistingDirectory(
-  rl: ReturnType<typeof createInterface>,
-  question: string,
-  defaultPath: string
-): Promise<string> {
-  while (true) {
-    const answer = await ask(rl, question);
-    const normalizedAnswer = answer.trim().toLowerCase();
-    const candidate =
-      answer.length === 0 || normalizedAnswer === "y" || normalizedAnswer === "yes"
-        ? resolveUserPath(defaultPath)
-        : resolveUserPath(answer);
-    try {
-      if (statSync(candidate).isDirectory()) {
-        return candidate;
-      }
-    } catch {
-      // fall through to retry message
-    }
-    console.log(`Directory not found: ${candidate}`);
-  }
-}
-
-async function askExistingJsonFile(
-  rl: ReturnType<typeof createInterface>,
-  question: string,
-  defaultPath: string
-): Promise<string> {
-  while (true) {
-    const answer = await ask(rl, question);
-    const normalizedAnswer = answer.trim().toLowerCase();
-    const candidate =
-      answer.length === 0 || normalizedAnswer === "y" || normalizedAnswer === "yes"
-        ? resolveUserPath(defaultPath)
-        : resolveUserPath(answer);
-    try {
-      if (statSync(candidate).isFile() && candidate.toLowerCase().endsWith(".json")) {
-        return candidate;
-      }
-      if (statSync(candidate).isFile()) {
-        console.log(`File is not JSON: ${candidate}`);
-        continue;
-      }
-    } catch {
-      // fall through to retry message
-    }
-    console.log(`JSON file not found: ${candidate}`);
-  }
 }
 
 async function runGuidedSession(args: CliArgs): Promise<void> {
@@ -1212,7 +1118,7 @@ function printUsage(): void {
   console.log("grim-fusion usage:");
   console.log("  npm run dev -- --example");
   console.log("  npm run dev -- session [--grim-dawn-path <path>] [--python <path-or-command>] [--no-launch]");
-  console.log("  npm run dev -- apply-plan [--plan-name <name>] [--force-apply]");
+  console.log("  npm run dev -- apply-plan --plan-name <name> [--force-apply]");
   console.log("  npm run dev -- run --profile <profile.json> --items <items.json> [--palette <gdse-palette.txt>] [--out <output.json>]");
   console.log("  npm run dev -- run --profile-dir <dir> --items <items.json> [--palette <gdse-palette.txt>] [--out <output.json>]");
   console.log("  npm run dev -- run-with-gleaner --profile <profile.json> --items <items.json> [--palette <gdse-palette.txt>] [--grim-dawn-path <path>] [--out <output.json>] [--force-apply]");
