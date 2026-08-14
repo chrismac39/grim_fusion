@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 import re
 import zlib
 from pathlib import Path
@@ -330,17 +331,34 @@ def _decrypted_byte_views(
     outputs: list[bytes] = []
     seen: set[bytes] = set()
 
-    # Some save blocks are encrypted independently and begin at nontrivial
-    # offsets inside player.gdc. Probe a bounded set of plausible offsets.
+    # Keep probing bounded so import remains responsive in the UI thread.
     candidate_offsets: list[int] = [0, 4, 8]
-    scan_limit = min(len(raw) - 8, 64 * 1024)
-    step = 4
-    for offset in range(12, scan_limit, step):
+    scan_limit = min(len(raw) - 8, 32 * 1024)
+    dense_limit = min(scan_limit, 1024)
+    for offset in range(12, dense_limit, 4):
+        candidate_offsets.append(offset)
+    for offset in range(dense_limit, scan_limit, 256):
         candidate_offsets.append(offset)
 
-    max_candidates = 96
+    max_candidates = 24
+    max_probe_ms = 700
+    started = time.perf_counter()
     selected = 0
     for offset in candidate_offsets:
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        if elapsed_ms > max_probe_ms:
+            _append_diagnostic_once(
+                diagnostics,
+                ParseDiagnostic(
+                    severity="info",
+                    code="crypto_probe_budget_exhausted",
+                    message=(
+                        "Stopped deep encrypted-block probing early to keep UI import responsive."
+                    ),
+                    source_file=source_file.name,
+                ),
+            )
+            break
         if selected >= max_candidates:
             break
         if len(raw) - offset < 12:
@@ -348,7 +366,7 @@ def _decrypted_byte_views(
         segment = raw[offset:]
         try:
             reader = _GDStashCryptoReader(segment)
-            decoded = reader.decode_remaining()
+            decoded = reader.decode_remaining(max_output_size=256 * 1024)
         except ValueError:
             continue
         if len(decoded) < 24:
@@ -391,8 +409,8 @@ def _inflated_byte_views(
 
     outputs: list[bytes] = []
     seen: set[bytes] = set()
-    max_candidates = 128
-    max_output_size = 8 * 1024 * 1024
+    max_candidates = 48
+    max_output_size = 2 * 1024 * 1024
 
     failures = 0
     for index, byte in enumerate(raw):
