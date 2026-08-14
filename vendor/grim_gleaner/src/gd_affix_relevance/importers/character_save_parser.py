@@ -459,15 +459,15 @@ def _decrypted_byte_views(
 
     # Keep probing bounded so import remains responsive in the UI thread.
     candidate_offsets: list[int] = [0, 4, 8]
-    scan_limit = min(len(raw) - 8, 32 * 1024)
-    dense_limit = min(scan_limit, 1024)
+    scan_limit = min(len(raw) - 8, 128 * 1024)
+    dense_limit = min(scan_limit, 4 * 1024)
     for offset in range(12, dense_limit, 4):
         candidate_offsets.append(offset)
-    for offset in range(dense_limit, scan_limit, 256):
+    for offset in range(dense_limit, scan_limit, 64):
         candidate_offsets.append(offset)
 
     max_candidates = 24
-    max_probe_ms = 700
+    max_probe_ms = 1800
     started = time.perf_counter()
     selected = 0
     crypto_stats = probe.get("crypto")
@@ -505,10 +505,17 @@ def _decrypted_byte_views(
         if len(decoded) < 24:
             continue
         # Keep views with explicit skill path signals or mastery identifiers.
+        # Packed saves often surface wide/null-interleaved strings, so check
+        # both raw and compacted forms before rejecting a decoded candidate.
+        decoded_lower = decoded.lower()
+        decoded_compact_lower = decoded.replace(b"\x00", b"").lower()
         if (
-            b"records/skills/" not in decoded.lower()
-            and b"records\\skills\\" not in decoded.lower()
-            and b"playerclass" not in decoded.lower()
+            b"records/skills/" not in decoded_lower
+            and b"records\\skills\\" not in decoded_lower
+            and b"playerclass" not in decoded_lower
+            and b"records/skills/" not in decoded_compact_lower
+            and b"records\\skills\\" not in decoded_compact_lower
+            and b"playerclass" not in decoded_compact_lower
         ):
             continue
         if decoded in seen:
