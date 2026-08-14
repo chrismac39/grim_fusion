@@ -140,6 +140,33 @@ def test_parse_character_save_reports_partial_parse_and_diagnostics(
     )
 
 
+def test_parse_character_save_infers_masteries_without_skill_references(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "player.gdc"
+    source.write_bytes(b"prefix-playerclass02-middle-playerclass08-suffix")
+
+    result = parse_character_save(source)
+
+    assert result.references == ()
+    assert result.metadata.inferred_masteries == (
+        "playerclass02",
+        "playerclass08",
+    )
+
+
+def test_parse_character_save_deduplicates_zlib_no_payload_diagnostics(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "player.gdc"
+    source.write_bytes(b"x" * 2048)
+
+    result = parse_character_save(source)
+
+    codes = [diag.code for diag in result.metadata.diagnostics]
+    assert codes.count("zlib_scan_no_payload") <= 1
+
+
 def test_gdstash_compatibility_report_handles_unknown_header(
     tmp_path: Path,
 ) -> None:

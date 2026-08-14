@@ -18,6 +18,7 @@ SKILL_REFERENCE_TEXT_PATTERN = re.compile(
     r"records[\\/]+skills[\\/]+[a-z0-9_./\\-]+?\.dbr",
     re.IGNORECASE,
 )
+MASTERY_ID_PATTERN = re.compile(rb"playerclass\d{2}", re.IGNORECASE)
 GDSTASH_SUPPORTED_CHARACTER_VERSIONS = frozenset({6, 7, 8})
 
 
@@ -37,6 +38,7 @@ class CharacterSaveParseMetadata:
     files_scanned: tuple[str, ...]
     bytes_scanned: int
     references_found: int
+    inferred_masteries: tuple[str, ...]
     partial_parse: bool
     confidence: float
     diagnostics: tuple[ParseDiagnostic, ...]
@@ -135,6 +137,7 @@ def parse_character_save(
 
     files = _candidate_character_files(source)
     references: set[str] = set()
+    inferred_masteries: set[str] = set()
     bytes_scanned = 0
     files_scanned: list[str] = []
     for file_path in files:
@@ -142,13 +145,14 @@ def parse_character_save(
         try:
             raw = file_path.read_bytes()
         except OSError as error:
-            diagnostics.append(
+            _append_diagnostic_once(
+                diagnostics,
                 ParseDiagnostic(
                     severity="error",
                     code="read_error",
                     message=f"Could not read save chunk: {error}",
                     source_file=file_path.name,
-                )
+                ),
             )
             continue
         bytes_scanned += len(raw)
@@ -157,13 +161,16 @@ def parse_character_save(
                 text = match.group().decode("ascii", "ignore")
                 for parsed in _extract_text_references(text):
                     references.add(_normalize_record_reference(parsed))
+            for match in MASTERY_ID_PATTERN.finditer(view):
+                inferred_masteries.add(match.group().decode("ascii", "ignore").casefold())
 
     normalized = tuple(sorted(reference for reference in references if reference))
     companion_count = len(
         [name for name in files_scanned if name.casefold() != "player.gdc"]
     )
     if not normalized and companion_count == 0:
-        diagnostics.append(
+        _append_diagnostic_once(
+            diagnostics,
             ParseDiagnostic(
                 severity="warning",
                 code="packed_save_without_companions",
@@ -172,7 +179,7 @@ def parse_character_save(
                     "packed saves may omit extractable skill DBR references."
                 ),
                 source_file="player.gdc",
-            )
+            ),
         )
 
     partial_parse = (
@@ -194,6 +201,7 @@ def parse_character_save(
         files_scanned=tuple(files_scanned),
         bytes_scanned=bytes_scanned,
         references_found=len(normalized),
+        inferred_masteries=tuple(sorted(inferred_masteries)),
         partial_parse=partial_parse,
         confidence=confidence,
         diagnostics=tuple(diagnostics),
@@ -245,6 +253,23 @@ def _candidate_character_files(source: Path) -> tuple[Path, ...]:
     if siblings:
         files.extend(siblings)
     return tuple(dict.fromkeys(files))
+
+
+def _append_diagnostic_once(
+    diagnostics: list[ParseDiagnostic],
+    entry: ParseDiagnostic,
+) -> None:
+    key = (entry.severity, entry.code, entry.message, entry.source_file)
+    for existing in diagnostics:
+        existing_key = (
+            existing.severity,
+            existing.code,
+            existing.message,
+            existing.source_file,
+        )
+        if existing_key == key:
+            return
+    diagnostics.append(entry)
 
 
 def _candidate_byte_views(
@@ -317,7 +342,8 @@ def _decrypted_byte_views(
         outputs.append(decoded)
 
     if not outputs and source_file.name.casefold().startswith("player.g"):
-        diagnostics.append(
+        _append_diagnostic_once(
+            diagnostics,
             ParseDiagnostic(
                 severity="info",
                 code="crypto_decode_no_payload",
@@ -325,7 +351,7 @@ def _decrypted_byte_views(
                     "No useful crypto-decoded payload was detected in this chunk."
                 ),
                 source_file=source_file.name,
-            )
+            ),
         )
 
     return tuple(outputs)
@@ -363,7 +389,8 @@ def _inflated_byte_views(
         outputs.append(inflated)
 
     if failures and not outputs:
-        diagnostics.append(
+        _append_diagnostic_once(
+            diagnostics,
             ParseDiagnostic(
                 severity="info",
                 code="zlib_scan_no_payload",
@@ -372,7 +399,7 @@ def _inflated_byte_views(
                     "could be inflated."
                 ),
                 source_file=source_file.name,
-            )
+            ),
         )
 
     return tuple(outputs)

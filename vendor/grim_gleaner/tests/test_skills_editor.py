@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -278,3 +279,21 @@ def test_double_click_adds_available_skill() -> None:
     assert profile.skill_weights == {
         "records/skills/playerclass02/flamestrike1.dbr": 0
     }
+
+
+def test_import_from_single_file_save_can_apply_inferred_masteries(
+    tmp_path: Path,
+) -> None:
+    _application()
+    profile = BuildProfile()
+    editor = SkillsEditor(profile, _catalog())
+    source = tmp_path / "player.gdc"
+    source.write_bytes(
+        b"header-playerclass01-mid-playerclass03-tail",
+    )
+
+    summary = editor.import_from_character_save(source)
+
+    assert summary.matched_skill_count == 0
+    assert summary.inferred_masteries == ("playerclass01", "playerclass03")
+    assert profile.masteries == ("playerclass01", "playerclass03")

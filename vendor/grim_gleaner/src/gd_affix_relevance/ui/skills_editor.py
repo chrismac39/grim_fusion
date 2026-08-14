@@ -524,6 +524,34 @@ class SkillsEditor(QWidget):
                 }
             )
         )
+        if not matched and metadata.inferred_masteries:
+            selected_masteries = list(metadata.inferred_masteries[:2])
+            while len(selected_masteries) < 2:
+                selected_masteries.append("")
+
+            self.profile.clear_skills()
+            self.profile.set_mastery(0, "")
+            self.profile.set_mastery(1, "")
+            if selected_masteries[0]:
+                self.profile.set_mastery(0, selected_masteries[0])
+            if selected_masteries[1]:
+                self.profile.set_mastery(1, selected_masteries[1])
+
+            self.refresh_from_profile()
+            self.changed.emit()
+            return CharacterSaveImportSummary(
+                save_path=Path(save_path).expanduser().resolve(),
+                skill_references_found=len(references),
+                matched_skill_count=0,
+                inferred_masteries=tuple(
+                    mastery_id for mastery_id in selected_masteries if mastery_id
+                ),
+                partial_parse=metadata.partial_parse,
+                confidence=metadata.confidence,
+                compatibility=compatibility.as_text(),
+                diagnostics=tuple(diag.message for diag in metadata.diagnostics),
+            )
+
         if not matched:
             unmatched = [reference for reference, resolved in resolved_pairs if resolved is None]
             sample = "\n".join(unmatched[:8])
@@ -542,6 +570,12 @@ class SkillsEditor(QWidget):
                 if len(references) == 0 and companion_count == 0
                 else ""
             )
+            tip = (
+                "\n\nTip: select player.gdc (or any file in the same character "
+                "folder) so companion files like player.g00/player.g01 can be read."
+                if companion_count > 0
+                else "\n\nTip: choose masteries manually and then add key build skills in the Skills tab."
+            )
             compatibility_hint = (
                 "\n\nGDStash compatibility check: " + compatibility.as_text()
             )
@@ -555,8 +589,7 @@ class SkillsEditor(QWidget):
                 "No selectable mastery skills were found in that character save. "
                 f"Found {len(references)} skill references but none mapped to "
                 "Gleaner's selectable mastery skills."
-                "\n\nTip: select player.gdc (or any file in the same character "
-                "folder) so companion files like player.g00/player.g01 can be read."
+                + tip
                 + packed_hint
                 + compatibility_hint
                 + diagnostics_hint
